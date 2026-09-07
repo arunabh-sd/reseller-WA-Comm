@@ -3,6 +3,10 @@ import client from "./client/whatsapp.js";
 import { startQRServer } from "./server.js";
 import { startScheduler } from "./scheduler.js";
 
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled rejection:", err?.message || err);
+});
+
 async function main() {
   console.log("Starting Reseller WA Community broadcaster…");
 

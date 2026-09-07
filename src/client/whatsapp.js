@@ -30,7 +30,7 @@ class WhatsAppClient extends EventEmitter {
         keys: makeCacheableSignalKeyStore(state.keys, logger),
       },
       logger,
-      printQRInTerminal: true,
+      printQRInTerminal: false,
       browser: ["ShopDeck Broadcaster", "Chrome", "1.0.0"],
     });
 
