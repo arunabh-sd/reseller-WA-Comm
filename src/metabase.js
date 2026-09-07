@@ -5,7 +5,7 @@ const MB_KEY = process.env.METABASE_API_KEY;
 
 const mb = axios.create({
   baseURL: MB_URL,
-  timeout: 30000,
+  timeout: 120000,
   headers: { "x-api-key": MB_KEY },
 });
 
