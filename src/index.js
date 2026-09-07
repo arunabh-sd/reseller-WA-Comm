@@ -2,6 +2,7 @@ import "dotenv/config";
 import client from "./client/whatsapp.js";
 import { startQRServer } from "./server.js";
 import { startScheduler } from "./scheduler.js";
+import { warmCache } from "./cache.js";
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err?.message || err);
@@ -18,6 +19,7 @@ async function main() {
 
   client.once("ready", () => {
     startScheduler();
+    warmCache().catch((e) => console.error("[cache] Warm failed:", e?.message));
   });
 
   client.once("logged_out", () => {

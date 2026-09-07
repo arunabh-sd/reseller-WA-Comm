@@ -1,90 +1,8 @@
-import { fetchPrimaryFeed, fetchCatalogueMeta } from "./metabase.js";
+import { getProductMap } from "./cache.js";
 import { CATEGORY_TYPES } from "./config/categories.js";
 import { AOV_BUCKETS, MIN_L30D_ORDERS, PRODUCTS_PER_SHARE } from "./config/schedule.js";
 import { getRecentlyShared } from "./history.js";
 import { loadWeights } from "./learning.js";
-
-// Build slug for qrate URL from product name
-function toSlug(name) {
-  return name
-    .trim()
-    .replace(/[^a-zA-Z0-9\s-]/g, "")
-    .replace(/\s+/g, "-");
-}
-
-// Merge primary feed (14878) + catalogue meta (13784) into one product map
-// Groups per product (not per SKU), aggregates sizes
-async function buildProductMap() {
-  const [feed, meta] = await Promise.all([fetchPrimaryFeed(), fetchCatalogueMeta()]);
-
-  // Index meta by product_id for fast lookup
-  // Also build sizes map: product_id → Set of size strings
-  const metaByProduct = new Map();
-  const sizesByProduct = new Map();
-
-  for (const row of meta) {
-    const id = row.customer_product_short_id;
-    if (!metaByProduct.has(id)) {
-      metaByProduct.set(id, row);
-      sizesByProduct.set(id, new Set());
-    }
-    if (row.size && row.size !== "OneSize") {
-      sizesByProduct.get(id).add(row.size);
-    }
-  }
-
-  // Group primary feed by product_id — pick the first SKU row as representative
-  const productMap = new Map();
-  for (const row of feed) {
-    const id = row.customer_product_short_id;
-    if (productMap.has(id)) continue; // first SKU wins
-
-    const m     = metaByProduct.get(id) || {};
-    const sizes = [...(sizesByProduct.get(id) || [])];
-
-    const qrateUrl = `https://qrate.shopdeck.com/${toSlug(row.product_name)}/catalogue/${id}/${row.customer_sku_short_id}`;
-
-    productMap.set(id, {
-      // Identity
-      customer_product_short_id: id,
-      customer_sku_short_id:     row.customer_sku_short_id,
-      seller_id:                 row.seller_id,
-      seller_name:               row.seller_name,
-
-      // Display
-      product_name:   row.product_name,
-      sharable_desc:  m.sharable_desc || "",
-      img_link:       row.img_link || "",
-      qrate_url:      qrateUrl,
-      sizes:          sizes.length ? sizes.join(", ") : null,
-
-      // Pricing
-      mrp:                           m.mrp || null,
-      reseller_selling_price:        row.reseller_selling_price_prepaid,
-      cod_charge:                    row.cod_charge || 0,
-      transfer_price:                row.transfer_price,
-
-      // Marketplace comparisons
-      mp_price:   row.mp_price,
-      mp_name:    row.mp_name,
-      mp_link:    row.mp_link,
-      website_price:        row.website_price,
-      website_product_link: row.website_product_link,
-      cheapest:   row.cheapest,
-      exclusive:  row.exclusive,
-
-      // Category
-      clean_product_type: m.clean_product_type || "",
-
-      // Ranking signals
-      orders_last_30d: row.orders_last_30d  || 0,
-      ppo_last_7d:     row.ppo_last_7d      || 0, // product page opens L7D
-      shares_last_7d:  row.shares_last_7d   || 0,
-    });
-  }
-
-  return productMap;
-}
 
 function normalise(arr) {
   const max = Math.max(...arr, 1);
@@ -94,7 +12,7 @@ function normalise(arr) {
 export async function getRankedForSlot({ category, aovBucket }) {
   const weights   = loadWeights();
   const recentIds = getRecentlyShared();
-  const products  = await buildProductMap();
+  const products  = await getProductMap();
 
   const validTypes = new Set(CATEGORY_TYPES[category] || []);
   const band       = AOV_BUCKETS[aovBucket] || AOV_BUCKETS.any;
