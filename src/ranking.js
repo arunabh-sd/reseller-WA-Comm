@@ -1,122 +1,153 @@
-import { fetchProductSignals, fetchProductCatalogue, fetchCustomProductData } from "./metabase.js";
-import { CATEGORY_TYPES, ALL_ACTIVE_TYPES } from "./config/categories.js";
-import { AOV_BUCKETS, MIN_L30D_ORDERS } from "./config/schedule.js";
+import { fetchPrimaryFeed, fetchCatalogueMeta } from "./metabase.js";
+import { CATEGORY_TYPES } from "./config/categories.js";
+import { AOV_BUCKETS, MIN_L30D_ORDERS, PRODUCTS_PER_SHARE } from "./config/schedule.js";
 import { getRecentlyShared } from "./history.js";
 import { loadWeights } from "./learning.js";
 
-function normalise(values) {
-  const max = Math.max(...values, 1);
-  return values.map((v) => v / max);
+// Build slug for qrate URL from product name
+function toSlug(name) {
+  return name
+    .trim()
+    .replace(/[^a-zA-Z0-9\s-]/g, "")
+    .replace(/\s+/g, "-");
 }
 
-// Build merged product map: product_id → full product object
+// Merge primary feed (14878) + catalogue meta (13784) into one product map
+// Groups per product (not per SKU), aggregates sizes
 async function buildProductMap() {
-  const [catalogue, signals, custom] = await Promise.all([
-    fetchProductCatalogue(),
-    fetchProductSignals(),
-    fetchCustomProductData(),
-  ]);
+  const [feed, meta] = await Promise.all([fetchPrimaryFeed(), fetchCatalogueMeta()]);
 
-  // Index signals and custom data by product_id
-  const signalMap = Object.fromEntries(
-    signals.map((r) => [r.customer_product_short_id, r])
-  );
-  const customMap = Object.fromEntries(
-    custom.map((r) => [r.customer_product_short_id, r])
-  );
+  // Index meta by product_id for fast lookup
+  // Also build sizes map: product_id → Set of size strings
+  const metaByProduct = new Map();
+  const sizesByProduct = new Map();
 
-  // Merge catalogue rows with signals
-  const map = new Map();
-  for (const row of catalogue) {
+  for (const row of meta) {
     const id = row.customer_product_short_id;
-    if (!id || !ALL_ACTIVE_TYPES.has(row.clean_product_type)) continue;
+    if (!metaByProduct.has(id)) {
+      metaByProduct.set(id, row);
+      sizesByProduct.set(id, new Set());
+    }
+    if (row.size && row.size !== "OneSize") {
+      sizesByProduct.get(id).add(row.size);
+    }
+  }
 
-    const sig = signalMap[id] || {};
-    const cus = customMap[id] || {};
+  // Group primary feed by product_id — pick the first SKU row as representative
+  const productMap = new Map();
+  for (const row of feed) {
+    const id = row.customer_product_short_id;
+    if (productMap.has(id)) continue; // first SKU wins
 
-    map.set(id, {
-      ...row,
-      // Prefer custom question data when available
-      image_url:            cus.image_url || null,
-      l30d_orders:          cus.l30d_orders  ?? sig.july_orders       ?? 0,
-      l7d_views:            cus.l7d_views    ?? sig.product_views      ?? 0,
-      l7d_shares:           cus.l7d_shares   ?? sig.product_shares     ?? 0,
-      reseller_orders:      cus.reseller_orders ?? sig.reseller_orders ?? 0,
-      lifetime_orders:      sig.lifetime_orders ?? 0,
+    const m     = metaByProduct.get(id) || {};
+    const sizes = [...(sizesByProduct.get(id) || [])];
+
+    const qrateUrl = `https://qrate.shopdeck.com/${toSlug(row.product_name)}/catalogue/${id}/${row.customer_sku_short_id}`;
+
+    productMap.set(id, {
+      // Identity
+      customer_product_short_id: id,
+      customer_sku_short_id:     row.customer_sku_short_id,
+      seller_id:                 row.seller_id,
+      seller_name:               row.seller_name,
+
+      // Display
+      product_name:   row.product_name,
+      sharable_desc:  m.sharable_desc || "",
+      img_link:       row.img_link || "",
+      qrate_url:      qrateUrl,
+      sizes:          sizes.length ? sizes.join(", ") : null,
+
+      // Pricing
+      mrp:                           m.mrp || null,
+      reseller_selling_price:        row.reseller_selling_price_prepaid,
+      cod_charge:                    row.cod_charge || 0,
+      transfer_price:                row.transfer_price,
+
+      // Marketplace comparisons
+      mp_price:   row.mp_price,
+      mp_name:    row.mp_name,
+      mp_link:    row.mp_link,
+      website_price:        row.website_price,
+      website_product_link: row.website_product_link,
+      cheapest:   row.cheapest,
+      exclusive:  row.exclusive,
+
+      // Category
+      clean_product_type: m.clean_product_type || "",
+
+      // Ranking signals
+      orders_last_30d: row.orders_last_30d  || 0,
+      ppo_last_7d:     row.ppo_last_7d      || 0, // product page opens L7D
+      shares_last_7d:  row.shares_last_7d   || 0,
     });
   }
 
-  return map;
+  return productMap;
 }
 
-// Score and rank products for a given slot
+function normalise(arr) {
+  const max = Math.max(...arr, 1);
+  return arr.map((v) => v / max);
+}
+
 export async function getRankedForSlot({ category, aovBucket }) {
-  const weights    = loadWeights();
-  const recentIds  = getRecentlyShared();
-  const productMap = await buildProductMap();
+  const weights   = loadWeights();
+  const recentIds = getRecentlyShared();
+  const products  = await buildProductMap();
 
-  const validTypes = CATEGORY_TYPES[category] || [];
-  const priceBand  = AOV_BUCKETS[aovBucket] || AOV_BUCKETS.any;
+  const validTypes = new Set(CATEGORY_TYPES[category] || []);
+  const band       = AOV_BUCKETS[aovBucket] || AOV_BUCKETS.any;
 
-  // Filter
-  const candidates = [...productMap.values()].filter((p) => {
-    if (!validTypes.includes(p.clean_product_type)) return false;
-    if (p.l30d_orders < MIN_L30D_ORDERS)             return false; // not a bestseller
-    if (recentIds.has(p.customer_product_short_id))  return false; // sent in last 30 days
+  const candidates = [...products.values()].filter((p) => {
+    if (!validTypes.has(p.clean_product_type))               return false;
+    if (p.orders_last_30d < MIN_L30D_ORDERS)                 return false;
+    if (recentIds.has(p.customer_product_short_id))          return false;
     const price = p.reseller_selling_price || 0;
-    if (price < priceBand.min || price > priceBand.max) return false;
+    if (price < band.min || price > band.max)                return false;
     return true;
   });
 
   if (!candidates.length) return [];
 
-  // Normalise signals
-  const l30dVals   = candidates.map((p) => p.l30d_orders);
-  const viewVals   = candidates.map((p) => p.l7d_views);
-  const shareVals  = candidates.map((p) => p.l7d_shares);
-
-  const normL30d   = normalise(l30dVals);
-  const normViews  = normalise(viewVals);
-  const normShares = normalise(shareVals);
+  const normOrders = normalise(candidates.map((p) => p.orders_last_30d));
+  const normPPO    = normalise(candidates.map((p) => p.ppo_last_7d));
+  const normShares = normalise(candidates.map((p) => p.shares_last_7d));
 
   const scored = candidates.map((p, i) => ({
     ...p,
     _score:
-      weights.l30d_orders  * normL30d[i]   +
-      weights.l7d_views    * normViews[i]  +
-      weights.l7d_shares   * normShares[i],
+      weights.l30d_orders * normOrders[i] +
+      weights.l7d_views   * normPPO[i]    +
+      weights.l7d_shares  * normShares[i],
   }));
 
-  // Sort descending
   scored.sort((a, b) => b._score - a._score);
   return scored;
 }
 
 // Pick N products for a slot, grouped by same sub-category where possible
-export async function pickSlotProducts(slot, n = 4) {
+export async function pickSlotProducts(slot) {
+  const n      = PRODUCTS_PER_SHARE;
   const ranked = await getRankedForSlot(slot);
   if (!ranked.length) return [];
 
-  // Try to find N products of the same sub-category (top sub-cat wins)
-  const subCatGroups = new Map();
+  // Group by sub-category
+  const groups = new Map();
   for (const p of ranked) {
     const sc = p.clean_product_type;
-    if (!subCatGroups.has(sc)) subCatGroups.set(sc, []);
-    subCatGroups.get(sc).push(p);
+    if (!groups.has(sc)) groups.set(sc, []);
+    groups.get(sc).push(p);
   }
 
-  // Best sub-category = the one with most high-scoring products
-  let bestGroup = [];
-  for (const [, group] of subCatGroups) {
-    if (group.length >= n && group.length > bestGroup.length) {
-      bestGroup = group;
-    }
+  // Best sub-category: highest sum of scores (proxy for group quality)
+  let best = [];
+  for (const group of groups.values()) {
+    const groupScore = group.slice(0, n).reduce((s, p) => s + p._score, 0);
+    const bestScore  = best.slice(0, n).reduce((s, p) => s + p._score, 0);
+    if (groupScore > bestScore) best = group;
   }
 
-  // Fall back to top-N across all sub-cats if no single sub-cat has N
-  if (bestGroup.length < n) {
-    bestGroup = ranked;
-  }
-
-  return bestGroup.slice(0, n);
+  // Fall back to top-N across all if no group big enough
+  return (best.length >= n ? best : ranked).slice(0, n);
 }

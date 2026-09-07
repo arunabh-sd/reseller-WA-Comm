@@ -9,51 +9,38 @@ const mb = axios.create({
   headers: { "x-api-key": MB_KEY },
 });
 
-async function runCard(cardId, params = {}) {
-  const { data } = await mb.post(
-    `/api/card/${cardId}/query/json`,
-    Object.keys(params).length ? { parameters: params } : {}
-  );
+async function runCard(cardId) {
+  const { data } = await mb.post(`/api/card/${cardId}/query/json`, {});
   return Array.isArray(data) ? data : [];
 }
 
-// ── Product performance signals (existing card 14565) ─────────────────────────
-// Returns: { customer_product_short_id, lifetime_orders, product_views,
-//            product_shares, reseller_orders }
-// TODO: replace with user's custom question ID once shared
+// Card 14878 — primary product feed (per SKU)
+// Columns: seller_id, seller_name, customer_product_short_id, customer_sku_short_id,
+//          product_name, img_link, website_product_link, website_price,
+//          transfer_price, reseller_selling_price_prepaid, cod_charge,
+//          mp_price, mp_name, mp_link, cheapest_non_meesho_price, marketplace_count,
+//          cheapest, exclusive, orders_last_30d, ppo_last_7d, shares_last_7d
+export async function fetchPrimaryFeed() {
+  const id = parseInt(process.env.METABASE_PRODUCT_QUESTION_ID || "14878");
+  return runCard(id);
+}
+
+// Card 13784 — category, description, MRP, sizes (per SKU)
+// Columns: customer_product_short_id, cust_sku_short_id, clean_product_type,
+//          sharable_desc, size, mrp, reseller_selling_price, seller_id ...
+export async function fetchCatalogueMeta() {
+  return runCard(13784);
+}
+
+// Card 14565 — lifetime signals fallback
 export async function fetchProductSignals() {
-  const CARD_ID = parseInt(process.env.METABASE_SIGNALS_QUESTION_ID || "14565");
-  return runCard(CARD_ID);
+  return runCard(14565);
 }
 
-// ── Product catalogue with categories (existing card 13784) ───────────────────
-// Returns: { customer_product_short_id, clean_product_type, sharable_desc,
-//            mrp, reseller_selling_price, seller_name, ... }
-// TODO: user's custom question will also include image_url and L30D orders —
-//       replace METABASE_CATALOGUE_QUESTION_ID once shared
-export async function fetchProductCatalogue() {
-  const CARD_ID = parseInt(process.env.METABASE_CATALOGUE_QUESTION_ID || "13784");
-  return runCard(CARD_ID);
-}
-
-// ── User's custom questions (plug in once IDs are shared) ─────────────────────
-// Expected columns: customer_product_short_id, image_url, l30d_orders, l7d_views, l7d_shares
-export async function fetchCustomProductData() {
-  const CARD_ID = process.env.METABASE_PRODUCT_QUESTION_ID;
-  if (!CARD_ID) return [];
-  return runCard(parseInt(CARD_ID));
-}
-
-// ── Yesterday's share performance (for daily learning) ────────────────────────
-// Pulls reseller_orders and shares for specific product IDs shared yesterday
+// For daily learning: performance of specific products
 export async function fetchProductPerformance(productIds) {
   if (!productIds.length) return [];
-  const CARD_ID = process.env.METABASE_PERFORMANCE_QUESTION_ID;
-  if (!CARD_ID) {
-    // Fallback: use signals card and filter
-    const all = await fetchProductSignals();
-    const ids = new Set(productIds);
-    return all.filter((r) => ids.has(r.customer_product_short_id));
-  }
-  return runCard(parseInt(CARD_ID));
+  const all = await fetchProductSignals();
+  const ids = new Set(productIds);
+  return all.filter((r) => ids.has(r.customer_product_short_id));
 }

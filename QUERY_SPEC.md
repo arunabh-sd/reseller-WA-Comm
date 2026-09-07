@@ -1,43 +1,60 @@
 # Metabase Query Spec — WA Broadcaster Product Feed
 
-The broadcaster reads from one primary Metabase question.
-Set its ID in Railway env var: `METABASE_PRODUCT_QUESTION_ID`
+The broadcaster reads from two Metabase questions.
+Set the primary card ID in Railway env var: `METABASE_PRODUCT_QUESTION_ID` (default: 14878)
 
-## Required columns
+## Card 14878 — Primary Product Feed (per SKU)
 
-| Column | Type | Source | Notes |
-|--------|------|--------|-------|
-| `customer_product_short_id` | string | products table | Product ID, e.g. `ysi98MUn` |
-| `product_name` | string | products | Full display title |
-| `sharable_desc` | string | products | 1–3 sentence description |
-| `clean_product_type` | string | products | e.g. `womens_clothing__womens_ethnic_wear__kurta_set` |
-| `mrp` | number | SKU | Original price |
-| `reseller_selling_price` | number | SKU | Reseller price |
-| `image_url` | string | products | First product image (CDN URL) |
-| `product_url` | string | derived | Full qrate.shopdeck.com link |
-| `sizes` | string | SKUs (aggregated) | Comma-separated, e.g. "S/36, M/38, L/40" |
-| `l30d_orders` | number | orders | Seller orders last 30 days (bestseller filter: ≥10) |
-
-## Optional columns (add to unlock more message features)
+All ranking signals and product display data in one query.
 
 | Column | Type | Notes |
 |--------|------|-------|
-| `l7d_views` | number | Reseller product views last 7 days |
-| `l7d_shares` | number | Reseller shares last 7 days |
-| `has_video` | boolean | True if customer review video exists |
-| `myntra_price` | number | Myntra price for same/similar product |
-| `myntra_url` | string | Myntra product link |
+| `seller_id` | string | Seller identifier |
+| `seller_name` | string | Seller display name |
+| `customer_product_short_id` | string | Product ID, e.g. `ysi98MUn` |
+| `customer_sku_short_id` | string | SKU ID (used to build qrate URL) |
+| `product_name` | string | Full display title |
+| `img_link` | string | First product image (CDN URL) |
+| `website_product_link` | string | Brand website product URL |
 | `website_price` | number | Brand website price |
-| `website_url` | string | Brand website link |
+| `transfer_price` | number | Transfer/wholesale price |
+| `reseller_selling_price_prepaid` | number | Reseller price (prepaid) |
+| `cod_charge` | number | COD surcharge if any |
+| `mp_price` | number | Marketplace (e.g. Myntra) price |
+| `mp_name` | string | Marketplace name, e.g. "myntra" |
+| `mp_link` | string | Marketplace product URL |
+| `cheapest_non_meesho_price` | number | Cheapest non-Meesho marketplace price |
+| `marketplace_count` | number | # marketplaces listing this product |
+| `cheapest` | boolean | True if ShopDeck reseller price is cheapest |
+| `exclusive` | boolean | True if not on any marketplace |
+| `orders_last_30d` | number | Seller orders in last 30 days (bestseller filter: ≥10) |
+| `ppo_last_7d` | number | Reseller product page opens in last 7 days |
+| `shares_last_7d` | number | Reseller shares in last 7 days |
 
-## Product URL format
-```
-https://qrate.shopdeck.com/{title-slug}/catalogue/{product_id}/{sku_short_id}
-```
-Easiest to pre-compute this in the SQL query itself.
+## Card 13784 — Catalogue Meta (per SKU)
 
-## Notes
-- One row per product (not per SKU) — sizes should be aggregated as a string
-- Only include active, in-stock products
-- The broadcaster applies its own filters (≥10 L30D orders, 30-day no-repeat, AOV band)
-  so the query can return the full eligible pool — no need to pre-filter by category
+Provides category, description, MRP, and size data.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `customer_product_short_id` | string | Product ID (join key) |
+| `cust_sku_short_id` | string | SKU ID |
+| `clean_product_type` | string | e.g. `womens_clothing__womens_ethnic_wear__kurta_set` |
+| `sharable_desc` | string | 1–3 sentence shareable description |
+| `size` | string | Individual size (one row per size) |
+| `mrp` | number | Original MRP |
+
+## Product URL Format
+
+Built automatically from card 14878 columns:
+```
+https://qrate.shopdeck.com/{product_name-slug}/catalogue/{customer_product_short_id}/{customer_sku_short_id}
+```
+
+## Broadcaster-Applied Filters
+
+The app applies these on top of the raw query results:
+- Bestseller only: `orders_last_30d ≥ 10`
+- No repeat within 30 days (tracked in `data/shared_history.json`)
+- AOV band match per slot (low ≤₹500, mid ₹501–1500, high >₹1500)
+- Category match (via `clean_product_type`)
