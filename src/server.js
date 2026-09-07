@@ -1,6 +1,8 @@
 import express from "express";
 import QRCode from "qrcode";
 import client from "./client/whatsapp.js";
+import { sendSlot } from "./sender.js";
+import { DAILY_SLOTS } from "./config/schedule.js";
 
 const PORT = process.env.PORT || 3000;
 
@@ -45,6 +47,18 @@ export function startQRServer() {
     } catch {
       res.status(500).send("Failed to render QR");
     }
+  });
+
+  // Manual test — triggers one slot send immediately
+  // Usage: /test  (picks first slot)  or  /test?category=kurti
+  app.get("/test", async (req, res) => {
+    if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
+    const category = req.query.category;
+    const slot = category
+      ? DAILY_SLOTS.find((s) => s.category === category) || DAILY_SLOTS[0]
+      : DAILY_SLOTS[0];
+    res.json({ message: `Triggering slot: ${slot.category} (${slot.aovBucket})` });
+    sendSlot(slot).catch((e) => console.error("[/test]", e));
   });
 
   // Root redirects to /qr
