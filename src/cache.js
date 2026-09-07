@@ -3,6 +3,7 @@ import { fetchPrimaryFeed, fetchCatalogueMeta } from "./metabase.js";
 const REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 function toSlug(name) {
+  if (!name) return "product";
   return name.trim().replace(/[^a-zA-Z0-9\s-]/g, "").replace(/\s+/g, "-");
 }
 
@@ -22,7 +23,7 @@ function buildMap(feed, meta) {
   const productMap = new Map();
   for (const row of feed) {
     const id = row.customer_product_short_id;
-    if (productMap.has(id)) continue;
+    if (!id || productMap.has(id)) continue;
     const m     = metaByProduct.get(id) || {};
     const sizes = [...(sizesByProduct.get(id) || [])];
     productMap.set(id, {
