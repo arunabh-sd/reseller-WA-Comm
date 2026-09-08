@@ -3,36 +3,15 @@ import { pickSlotProducts } from "./ranking.js";
 import { recordShared } from "./history.js";
 import { SUBCATEGORY_LABELS } from "./config/categories.js";
 
-const COMMUNITY_TARGETS = [
-  "Resellers - QRate By Shopdeck",
-  "Resellers - QRate By Shopdeck - 2",
+// Hardcoded target JIDs (from /debug/groups)
+const TARGET_JIDS = [
+  "120363410134784350@g.us", // Resellers - QRate By Shopdeck (community sub-group)
+  "120363428254767701@g.us", // Resellers - QRate By Shopdeck - 2 (community sub-group)
+  "120363411903988006@g.us", // Shopdeck - Focus Group - Reseller Channel
 ];
-const GROUP_TARGETS = [
-  "Shopdeck - Focus Group - Reseller Channel",
-];
-
-let cachedTargetJids = null;
 
 async function getTargetJids() {
-  if (cachedTargetJids) return cachedTargetJids;
-
-  const jids = [];
-
-  for (const name of COMMUNITY_TARGETS) {
-    const g = await client.findCommunityAnnouncements(name);
-    if (g) jids.push(g.id);
-    else console.warn(`[Sender] Announcements not found in community: ${name}`);
-  }
-  for (const name of GROUP_TARGETS) {
-    const g = await client.findGroupByName(name);
-    if (g) jids.push(g.id);
-    else console.warn(`[Sender] Group not found: ${name}`);
-  }
-
-  if (!jids.length) throw new Error("No valid WA targets found — check WA_GROUP_NAME / WA_COMMUNITY_1 / WA_COMMUNITY_2");
-  cachedTargetJids = jids;
-  console.log(`[Sender] Resolved ${jids.length} target(s):`, jids);
-  return jids;
+  return TARGET_JIDS;
 }
 
 // ── Festival calendar ─────────────────────────────────────────────────────────

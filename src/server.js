@@ -64,14 +64,18 @@ export function startQRServer() {
   });
 
   // Manual test — triggers one slot send immediately
-  // Usage: /test  (picks first slot)  or  /test?category=kurti
+  // Usage: /test  /test?category=kurti  /test?hour=15
   app.get("/test", async (req, res) => {
     if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
-    const category = req.query.category;
-    const slot = category
-      ? DAILY_SLOTS.find((s) => s.category === category) || DAILY_SLOTS[0]
-      : DAILY_SLOTS[0];
-    res.json({ message: `Triggering slot: ${slot.category} (${slot.aovBucket})` });
+    let slot;
+    if (req.query.hour) {
+      slot = DAILY_SLOTS.find((s) => s.hour === parseInt(req.query.hour)) || DAILY_SLOTS[0];
+    } else if (req.query.category) {
+      slot = DAILY_SLOTS.find((s) => s.category === req.query.category) || DAILY_SLOTS[0];
+    } else {
+      slot = DAILY_SLOTS[0];
+    }
+    res.json({ message: `Triggering slot: ${slot.hour}:${String(slot.minute).padStart(2,"0")} ${slot.category} (${slot.aovBucket})` });
     sendSlot(slot).catch((e) => console.error("[/test]", e));
   });
 
