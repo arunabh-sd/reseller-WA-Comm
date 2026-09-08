@@ -15,8 +15,28 @@ async function getGroupJid() {
   return cachedGroupJid;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// ── Festival calendar ─────────────────────────────────────────────────────────
+// Show tag when within 28 days before the festival start
+const FESTIVALS = [
+  { name: "Navratri",  emoji: "🪷", start: "2026-10-02", categories: ["kurti","saree","jewellery"] },
+  { name: "Dussehra",  emoji: "🏹", start: "2026-10-12", categories: ["kurti","saree"] },
+  { name: "Diwali",    emoji: "🪔", start: "2026-11-01", categories: ["kurti","saree","jewellery","western","bags"] },
+  { name: "Holi",      emoji: "🎨", start: "2027-03-14", categories: ["kurti","western"] },
+  { name: "Eid",       emoji: "🌙", start: "2027-03-30", categories: ["kurti","saree"] },
+];
 
+function getActiveFestival(category) {
+  const today = new Date();
+  for (const f of FESTIVALS) {
+    if (!f.categories.includes(category)) continue;
+    const start = new Date(f.start);
+    const daysAway = (start - today) / 86400000;
+    if (daysAway >= 0 && daysAway <= 28) return f;
+  }
+  return null;
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt(n) {
   if (!n) return "";
   return `₹${Number(n).toLocaleString("en-IN")}`;
@@ -31,21 +51,44 @@ function fmtOrders(n) {
 
 const NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
 
-// ── Combined text message for all products ────────────────────────────────────
+// ── Combined text message ─────────────────────────────────────────────────────
 function buildCombinedText(products, slot) {
-  const label = SUBCATEGORY_LABELS[products[0]?.clean_product_type] || slot.category;
-  const lines = [];
+  const subCatLabel = SUBCATEGORY_LABELS[products[0]?.clean_product_type] || slot.category;
+  const isPremium   = slot.aovBucket === "high";
+  const festival    = getActiveFestival(slot.category);
 
-  lines.push(`🛍️ *${label}* — Today's Bestsellers`);
-  lines.push("");
+  // Header
+  const label    = isPremium ? `💎 Premium ${subCatLabel}` : subCatLabel;
+  const occasion = festival ? `${festival.name} Collection ${festival.emoji}` : "Today's Bestsellers";
+  const lines    = [`🛍️ *${label}* — ${occasion}`, ""];
 
+  // Per-product block
   products.forEach((p, i) => {
     lines.push(`${NUMBERS[i] || `${i + 1}.`} *${p.product_name}*`);
 
-    // Cut price = website price if higher, else no strikethrough
+    // Cut price = website price (always exists per user)
     const sellerPrice = p.reseller_selling_price || 0;
-    const cutPrice = p.website_price && p.website_price > sellerPrice ? p.website_price : null;
-    lines.push(cutPrice ? `~${fmt(cutPrice)}~ *${fmt(sellerPrice)}*` : `*${fmt(sellerPrice)}*`);
+    lines.push(`~${fmt(p.website_price)}~ *${fmt(sellerPrice)}*`);
+
+    // Orders
+    const ordersLabel = fmtOrders(p.orders_last_30d);
+    const ordersPart  = ordersLabel ? `📦 ${ordersLabel} orders` : null;
+
+    // Trust signal — exclusive > marketplace saving
+    let trust = null;
+    if (p.exclusive) {
+      trust = "Exclusive — not listed on any marketplace 🔒";
+    } else if (p.mp_price && p.mp_price - sellerPrice >= 100) {
+      const mpName = p.mp_name
+        ? p.mp_name.charAt(0).toUpperCase() + p.mp_name.slice(1)
+        : "Marketplace";
+      trust = `${fmt(p.mp_price - sellerPrice)} cheaper than ${mpName}`;
+    }
+
+    // Orders + trust on same line if both exist, else separate
+    if (ordersPart && trust) lines.push(`${ordersPart} · ${trust}`);
+    else if (ordersPart)     lines.push(ordersPart);
+    else if (trust)          lines.push(trust);
 
     if (p.sizes) lines.push(`Sizes: ${p.sizes}`);
     if (p.has_video) lines.push(`🎥 Customer review video`);
@@ -53,12 +96,9 @@ function buildCombinedText(products, slot) {
     lines.push("");
   });
 
-  // Shared trust signals
-  const totalOrders = products.reduce((s, p) => s + (p.orders_last_30d || 0), 0);
-  const ordersLabel = fmtOrders(totalOrders);
-  if (ordersLabel) lines.push(`📦 *${ordersLabel}* orders already placed`);
-  lines.push("✅ Free delivery · COD Available · Returns");
-  lines.push("🚚 Delivery in 4 to 7 days");
+  // Shared trust footer
+  lines.push("✅ Free delivery · COD available · Easy returns");
+  lines.push("🚚 Delivered in 4–7 days");
 
   return lines.join("\n");
 }
@@ -68,13 +108,13 @@ export async function sendSlot(slot) {
   const products = await pickSlotProducts(slot);
 
   if (!products.length) {
-    console.log(`[Slot ${slot.hour}h] No eligible ${slot.category} products — skipping`);
+    console.log(`[Slot ${slot.hour}:${String(slot.minute||0).padStart(2,"0")}] No eligible ${slot.category} products — skipping`);
     return;
   }
 
   const groupJid = await getGroupJid();
 
-  // 1. Send images as quick burst → WA auto-groups them into an album
+  // 1. Quick image burst → WA auto-albums them
   for (let i = 0; i < products.length; i++) {
     const p = products[i];
     if (p.img_link) {
@@ -85,25 +125,20 @@ export async function sendSlot(slot) {
           await client.sock.sendMessage(groupJid, { image: buffer, mimetype: "image/jpeg" });
         }
       } catch (e) {
-        console.warn(`[Slot ${slot.hour}h] Image fetch failed for ${p.product_name}:`, e.message);
+        console.warn(`Image fetch failed for ${p.product_name}:`, e.message);
       }
     }
-    // Short delay between images — quick enough that WA groups them as album
     await new Promise((r) => setTimeout(r, 300 + Math.random() * 200));
   }
 
-  // 2. Brief pause before text so album renders first
+  // 2. Brief pause so album renders first
   await new Promise((r) => setTimeout(r, 1500));
 
-  // 3. One combined text with all details + individual links
-  const text = buildCombinedText(products, slot);
-  await client.sendTextMessage(groupJid, text);
+  // 3. One combined text
+  await client.sendTextMessage(groupJid, buildCombinedText(products, slot));
 
   recordShared(products, slot);
 
-  console.log(
-    `✓ [${slot.hour}:00] ${slot.category} | ` +
-    `${products.length} products | ` +
-    `sub-cat: ${SUBCATEGORY_LABELS[products[0]?.clean_product_type] || "?"}`
-  );
+  const label = SUBCATEGORY_LABELS[products[0]?.clean_product_type] || "?";
+  console.log(`✓ [${slot.hour}:${String(slot.minute||0).padStart(2,"0")}] ${slot.category} | ${products.length} products | ${label}`);
 }

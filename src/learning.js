@@ -9,9 +9,10 @@ const PERF_FILE    = join(DATA_DIR, "performance_log.json");
 
 // Default ranking weights
 const DEFAULT_WEIGHTS = {
-  l30d_orders: 0.50,
-  l7d_views:   0.30,
-  l7d_shares:  0.20,
+  l30d_orders: 0.40,
+  margin:      0.25,
+  l7d_views:   0.20,
+  l7d_shares:  0.15,
 };
 
 export function loadWeights() {

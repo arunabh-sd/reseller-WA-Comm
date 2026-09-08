@@ -31,13 +31,15 @@ export async function getRankedForSlot({ category, aovBucket }) {
   const normOrders = normalise(candidates.map((p) => p.orders_last_30d));
   const normPPO    = normalise(candidates.map((p) => p.ppo_last_7d));
   const normShares = normalise(candidates.map((p) => p.shares_last_7d));
+  const normMargin = normalise(candidates.map((p) => p.margin || 0));
 
   const scored = candidates.map((p, i) => ({
     ...p,
     _score:
-      weights.l30d_orders * normOrders[i] +
-      weights.l7d_views   * normPPO[i]    +
-      weights.l7d_shares  * normShares[i],
+      (weights.l30d_orders || 0.40) * normOrders[i] +
+      (weights.margin      || 0.25) * normMargin[i] +
+      (weights.l7d_views   || 0.20) * normPPO[i]    +
+      (weights.l7d_shares  || 0.15) * normShares[i],
   }));
 
   scored.sort((a, b) => b._score - a._score);

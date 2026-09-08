@@ -49,6 +49,8 @@ function buildMap(feed, meta) {
       orders_last_30d:           row.orders_last_30d  || 0,
       ppo_last_7d:               row.ppo_last_7d      || 0,
       shares_last_7d:            row.shares_last_7d   || 0,
+      // Reseller margin: max they can earn per sale (website price - reseller price)
+      margin: Math.max(0, (row.website_price || 0) - (row.reseller_selling_price_prepaid || 0)),
     });
   }
   return productMap;

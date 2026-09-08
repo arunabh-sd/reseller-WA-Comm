@@ -1,32 +1,37 @@
-// Daily broadcast schedule — 11 slots, 9am–7pm IST
-// Each slot: { hour, category, aovBucket }
-// aovBucket: 'low' (≤500), 'mid' (501-1500), 'high' (>1500), 'any'
-// Rotating across price bands ensures healthy AOV variety across the day
-
+// 23 slots/day — every 30 min, 9:00am–8:00pm IST
+// Distribution: Kurti ×8, Jewellery ×6, Saree ×4, Western ×3, Bags ×2
 export const DAILY_SLOTS = [
-  { hour: 9,  category: "kurti",    aovBucket: "mid"  },
-  { hour: 10, category: "jewellery",aovBucket: "low"  },
-  { hour: 11, category: "saree",    aovBucket: "high" },
-  { hour: 12, category: "kurti",    aovBucket: "low"  },
-  { hour: 13, category: "western",  aovBucket: "mid"  },
-  { hour: 14, category: "jewellery",aovBucket: "mid"  },
-  { hour: 15, category: "kurti",    aovBucket: "high" },
-  { hour: 16, category: "saree",    aovBucket: "mid"  },
-  { hour: 17, category: "western",  aovBucket: "low"  },
-  { hour: 18, category: "jewellery",aovBucket: "high" },
-  { hour: 19, category: "bags",     aovBucket: "any"  },
+  { hour: 9,  minute: 0,  category: "kurti",     aovBucket: "mid"  },
+  { hour: 9,  minute: 30, category: "jewellery",  aovBucket: "low"  },
+  { hour: 10, minute: 0,  category: "kurti",     aovBucket: "high" },
+  { hour: 10, minute: 30, category: "saree",      aovBucket: "mid"  },
+  { hour: 11, minute: 0,  category: "kurti",     aovBucket: "low"  },
+  { hour: 11, minute: 30, category: "western",    aovBucket: "mid"  },
+  { hour: 12, minute: 0,  category: "jewellery",  aovBucket: "mid"  },
+  { hour: 12, minute: 30, category: "kurti",     aovBucket: "mid"  },
+  { hour: 13, minute: 0,  category: "saree",      aovBucket: "high" },
+  { hour: 13, minute: 30, category: "jewellery",  aovBucket: "high" },
+  { hour: 14, minute: 0,  category: "kurti",     aovBucket: "low"  },
+  { hour: 14, minute: 30, category: "bags",       aovBucket: "any"  },
+  { hour: 15, minute: 0,  category: "jewellery",  aovBucket: "low"  },
+  { hour: 15, minute: 30, category: "kurti",     aovBucket: "high" },
+  { hour: 16, minute: 0,  category: "western",    aovBucket: "low"  },
+  { hour: 16, minute: 30, category: "saree",      aovBucket: "mid"  },
+  { hour: 17, minute: 0,  category: "kurti",     aovBucket: "mid"  },
+  { hour: 17, minute: 30, category: "jewellery",  aovBucket: "mid"  },
+  { hour: 18, minute: 0,  category: "kurti",     aovBucket: "low"  },
+  { hour: 18, minute: 30, category: "saree",      aovBucket: "high" },
+  { hour: 19, minute: 0,  category: "jewellery",  aovBucket: "high" },
+  { hour: 19, minute: 30, category: "western",    aovBucket: "mid"  },
+  { hour: 20, minute: 0,  category: "bags",       aovBucket: "any"  },
 ];
 
-// Price thresholds (reseller_selling_price in ₹)
 export const AOV_BUCKETS = {
-  low:  { min: 0,    max: 500  },
-  mid:  { min: 501,  max: 1500 },
+  low:  { min: 0,    max: 500      },
+  mid:  { min: 501,  max: 1500     },
   high: { min: 1501, max: Infinity },
   any:  { min: 0,    max: Infinity },
 };
 
-// Products per share (how many products in one WA message)
 export const PRODUCTS_PER_SHARE = 4;
-
-// Bestseller threshold: min seller orders in last 30 days
-export const MIN_L30D_ORDERS = 10;
+export const MIN_L30D_ORDERS    = 10;
