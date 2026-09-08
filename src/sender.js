@@ -31,7 +31,7 @@ function getActiveFestival(category) {
     if (!f.categories.includes(category)) continue;
     const start = new Date(f.start);
     const daysAway = (start - today) / 86400000;
-    if (daysAway >= 0 && daysAway <= 28) return f;
+    if (daysAway >= 0 && daysAway <= 10) return f;
   }
   return null;
 }
