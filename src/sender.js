@@ -3,10 +3,13 @@ import { pickSlotProducts } from "./ranking.js";
 import { recordShared } from "./history.js";
 import { SUBCATEGORY_LABELS } from "./config/categories.js";
 
-// Targets (resolved once, then cached)
-const TARGET_GROUP      = process.env.WA_GROUP_NAME      || "";
-const TARGET_COMMUNITY_1 = process.env.WA_COMMUNITY_1   || "";
-const TARGET_COMMUNITY_2 = process.env.WA_COMMUNITY_2   || "";
+const COMMUNITY_TARGETS = [
+  "Resellers - QRate By Shopdeck",
+  "Resellers - QRate By Shopdeck - 2",
+];
+const GROUP_TARGETS = [
+  "Shopdeck - Focus Group - Reseller Channel",
+];
 
 let cachedTargetJids = null;
 
@@ -15,20 +18,15 @@ async function getTargetJids() {
 
   const jids = [];
 
-  if (TARGET_COMMUNITY_1) {
-    const g = await client.findCommunityAnnouncements(TARGET_COMMUNITY_1);
+  for (const name of COMMUNITY_TARGETS) {
+    const g = await client.findCommunityAnnouncements(name);
     if (g) jids.push(g.id);
-    else console.warn(`[Sender] Announcements not found in community: ${TARGET_COMMUNITY_1}`);
+    else console.warn(`[Sender] Announcements not found in community: ${name}`);
   }
-  if (TARGET_COMMUNITY_2) {
-    const g = await client.findCommunityAnnouncements(TARGET_COMMUNITY_2);
+  for (const name of GROUP_TARGETS) {
+    const g = await client.findGroupByName(name);
     if (g) jids.push(g.id);
-    else console.warn(`[Sender] Announcements not found in community: ${TARGET_COMMUNITY_2}`);
-  }
-  if (TARGET_GROUP) {
-    const g = await client.findGroupByName(TARGET_GROUP);
-    if (g) jids.push(g.id);
-    else console.warn(`[Sender] Group not found: ${TARGET_GROUP}`);
+    else console.warn(`[Sender] Group not found: ${name}`);
   }
 
   if (!jids.length) throw new Error("No valid WA targets found — check WA_GROUP_NAME / WA_COMMUNITY_1 / WA_COMMUNITY_2");
