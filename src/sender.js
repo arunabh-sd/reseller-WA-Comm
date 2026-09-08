@@ -4,14 +4,17 @@ import { recordShared } from "./history.js";
 import { SUBCATEGORY_LABELS } from "./config/categories.js";
 
 // Hardcoded target JIDs (from /debug/groups)
-const TARGET_JIDS = [
+const COMMUNITY_JIDS = [
   "120363410134784350@g.us", // Resellers - QRate By Shopdeck (community sub-group)
   "120363428254767701@g.us", // Resellers - QRate By Shopdeck - 2 (community sub-group)
+];
+const ALL_JIDS = [
+  ...COMMUNITY_JIDS,
   "120363411903988006@g.us", // Shopdeck - Focus Group - Reseller Channel
 ];
 
-async function getTargetJids() {
-  return TARGET_JIDS;
+async function getTargetJids(communitiesOnly = false) {
+  return communitiesOnly ? COMMUNITY_JIDS : ALL_JIDS;
 }
 
 // ── Festival calendar ─────────────────────────────────────────────────────────
@@ -103,7 +106,7 @@ function buildCombinedText(products, slot) {
 }
 
 // ── Main send ─────────────────────────────────────────────────────────────────
-export async function sendSlot(slot) {
+export async function sendSlot(slot, communitiesOnly = false) {
   const products = await pickSlotProducts(slot);
 
   if (!products.length) {
@@ -111,7 +114,7 @@ export async function sendSlot(slot) {
     return;
   }
 
-  const targetJids = await getTargetJids();
+  const targetJids = await getTargetJids(communitiesOnly);
 
   // Pre-fetch all images once (avoid re-fetching per target)
   const buffers = await Promise.all(

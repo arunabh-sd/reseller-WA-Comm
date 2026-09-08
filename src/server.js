@@ -75,8 +75,9 @@ export function startQRServer() {
     } else {
       slot = DAILY_SLOTS[0];
     }
-    res.json({ message: `Triggering slot: ${slot.hour}:${String(slot.minute).padStart(2,"0")} ${slot.category} (${slot.aovBucket})` });
-    sendSlot(slot).catch((e) => console.error("[/test]", e));
+    const onlyCommunities = req.query.targets === "communities";
+    res.json({ message: `Triggering slot: ${slot.hour}:${String(slot.minute).padStart(2,"0")} ${slot.category} (${slot.aovBucket})${onlyCommunities ? " — communities only" : ""}` });
+    sendSlot(slot, onlyCommunities).catch((e) => console.error("[/test]", e));
   });
 
   // Root redirects to /qr
