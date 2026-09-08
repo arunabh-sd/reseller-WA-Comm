@@ -49,6 +49,20 @@ export function startQRServer() {
     }
   });
 
+  // Debug — dump all groups/communities with key fields
+  app.get("/debug/groups", async (_req, res) => {
+    if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
+    const groups = await client.sock.groupFetchAllParticipating();
+    const summary = Object.values(groups).map((g) => ({
+      id:           g.id,
+      subject:      g.subject,
+      linkedParent: g.linkedParent || null,
+      isParent:     g.isParent     || null,
+      isCommunity:  g.isCommunity  || null,
+    }));
+    res.json(summary);
+  });
+
   // Manual test — triggers one slot send immediately
   // Usage: /test  (picks first slot)  or  /test?category=kurti
   app.get("/test", async (req, res) => {
