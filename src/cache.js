@@ -1,4 +1,7 @@
 import { fetchPrimaryFeed, fetchCatalogueMeta } from "./metabase.js";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const PRODUCT_LABELS = require("./data/product_labels.json");
 
 const REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
 
@@ -46,6 +49,8 @@ function buildMap(feed, meta) {
       cheapest:                  row.cheapest,
       exclusive:                 row.exclusive,
       clean_product_type:        m.clean_product_type || "",
+      category_l1:               (PRODUCT_LABELS[id]?.l1) || "",
+      category_l2:               (PRODUCT_LABELS[id]?.l2) || "",
       orders_last_30d:           row.orders_last_30d  || 0,
       ppo_last_7d:               row.ppo_last_7d      || 0,
       shares_last_7d:            row.shares_last_7d   || 0,

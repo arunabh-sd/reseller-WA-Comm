@@ -53,7 +53,7 @@ const NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
 
 // ── Combined text message ─────────────────────────────────────────────────────
 function buildCombinedText(products, slot) {
-  const subCatLabel = SUBCATEGORY_LABELS[products[0]?.clean_product_type] || slot.category;
+  const subCatLabel = products[0]?.category_l2 || SUBCATEGORY_LABELS[products[0]?.clean_product_type] || slot.category;
   const isPremium   = slot.aovBucket === "high";
   const festival    = getActiveFestival(slot.category);
 
@@ -139,6 +139,6 @@ export async function sendSlot(slot) {
 
   recordShared(products, slot);
 
-  const label = SUBCATEGORY_LABELS[products[0]?.clean_product_type] || "?";
+  const label = products[0]?.category_l2 || SUBCATEGORY_LABELS[products[0]?.clean_product_type] || "?";
   console.log(`✓ [${slot.hour}:${String(slot.minute||0).padStart(2,"0")}] ${slot.category} | ${products.length} products | ${label}`);
 }
