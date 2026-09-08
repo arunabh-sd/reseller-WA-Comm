@@ -37,10 +37,14 @@ export async function fetchProductSignals() {
   return runCard(14565);
 }
 
-// For daily learning: performance of specific products
-export async function fetchProductPerformance(productIds) {
-  if (!productIds.length) return [];
-  const all = await fetchProductSignals();
-  const ids = new Set(productIds);
-  return all.filter((r) => ids.has(r.customer_product_short_id));
+// Card 14915 — day-range performance (orders, PPO, shares)
+// Requires start_date and end_date (YYYY-MM-DD)
+export async function fetchPerformanceForDate(dateStr) {
+  const { data } = await mb.post(`/api/card/14915/query/json`, {
+    parameters: [
+      { type: "date/single", target: ["variable", ["template-tag", "start_date"]], value: dateStr },
+      { type: "date/single", target: ["variable", ["template-tag", "end_date"]],   value: dateStr },
+    ],
+  });
+  return Array.isArray(data) ? data : [];
 }

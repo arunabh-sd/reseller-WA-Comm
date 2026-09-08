@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { DAILY_SLOTS } from "./config/schedule.js";
 import { sendSlot } from "./sender.js";
 import { runDailyLearning } from "./learning.js";
+import client from "./client/whatsapp.js";
 
 export function startScheduler() {
   for (const slot of DAILY_SLOTS) {
@@ -20,12 +21,12 @@ export function startScheduler() {
     );
   }
 
-  // Daily learning — 8:30am IST
+  // Daily learning — 8:45am IST (before 9am slots fire)
   cron.schedule(
-    "30 8 * * *",
+    "45 8 * * *",
     async () => {
       try {
-        await runDailyLearning();
+        await runDailyLearning(client);
       } catch (err) {
         console.error("[Learning] Daily run failed:", err.message);
       }

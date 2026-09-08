@@ -42,7 +42,7 @@ export function recordShared(products, slotMeta) {
   for (const p of products) {
     entries.push({
       product_id:   p.customer_product_short_id,
-      title:        p.sharable_desc?.slice(0, 60) || "",
+      product_name: p.product_name || "",
       category:     slotMeta.category,
       sub_category: p.clean_product_type,
       price:        p.reseller_selling_price,

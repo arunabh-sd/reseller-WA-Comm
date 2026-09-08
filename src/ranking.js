@@ -4,6 +4,15 @@ import { AOV_BUCKETS, MIN_L30D_ORDERS, PRODUCTS_PER_SHARE } from "./config/sched
 import { getRecentlyShared } from "./history.js";
 import { loadWeights } from "./learning.js";
 
+// Maps slot category names → category_l1 strings from product_labels.json
+const CATEGORY_L1_MAP = {
+  kurti:     "Kurtas, Kurtis & Sets",
+  saree:     "Sarees",
+  jewellery: "Jewellery",
+  western:   "Western Wear",
+  bags:      "Bags",
+};
+
 function normalise(arr) {
   const max = Math.max(...arr, 1);
   return arr.map((v) => v / max);
@@ -14,11 +23,14 @@ export async function getRankedForSlot({ category, aovBucket }) {
   const recentIds = getRecentlyShared();
   const products  = await getProductMap();
 
-  const validTypes = new Set(CATEGORY_TYPES[category] || []);
-  const band       = AOV_BUCKETS[aovBucket] || AOV_BUCKETS.any;
+  const validTypes  = new Set(CATEGORY_TYPES[category] || []);
+  const band        = AOV_BUCKETS[aovBucket] || AOV_BUCKETS.any;
+  const expectedL1  = CATEGORY_L1_MAP[category];
 
   const candidates = [...products.values()].filter((p) => {
     if (!validTypes.has(p.clean_product_type))               return false;
+    // L1 guard: if we have L1 data for this product, it must match the slot's L1
+    if (expectedL1 && p.category_l1 && p.category_l1 !== expectedL1) return false;
     if (p.orders_last_30d < MIN_L30D_ORDERS)                 return false;
     if (recentIds.has(p.customer_product_short_id))          return false;
     const price = p.reseller_selling_price || 0;
