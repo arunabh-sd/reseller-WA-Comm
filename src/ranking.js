@@ -66,6 +66,7 @@ export async function pickSlotProducts(slot) {
     if (groupScore > bestScore) best = group;
   }
 
-  // Fall back to top-N across all if no group big enough
-  return (best.length >= n ? best : ranked).slice(0, n);
+  // Never mix sub-categories — take however many the best group has (min 2)
+  if (best.length < 2) return [];
+  return best.slice(0, n);
 }

@@ -15,7 +15,7 @@ async function getGroupJid() {
   return cachedGroupJid;
 }
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmt(n) {
   if (!n) return "";
@@ -29,76 +29,38 @@ function fmtOrders(n) {
   return `${n}+`;
 }
 
-// ── Per-product caption ────────────────────────────────────────────────────────
-function buildCaption(p) {
+const NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+
+// ── Combined text message for all products ────────────────────────────────────
+function buildCombinedText(products, slot) {
+  const label = SUBCATEGORY_LABELS[products[0]?.clean_product_type] || slot.category;
   const lines = [];
 
-  // Title
-  lines.push(`*${p.product_name}*`);
+  lines.push(`🛍️ *${label}* — Today's Bestsellers`);
   lines.push("");
 
-  // Description
-  if (p.sharable_desc) {
-    lines.push(p.sharable_desc);
+  products.forEach((p, i) => {
+    lines.push(`${NUMBERS[i] || `${i + 1}.`} *${p.product_name}*`);
+
+    // Cut price = website price if higher, else no strikethrough
+    const sellerPrice = p.reseller_selling_price || 0;
+    const cutPrice = p.website_price && p.website_price > sellerPrice ? p.website_price : null;
+    lines.push(cutPrice ? `~${fmt(cutPrice)}~ *${fmt(sellerPrice)}*` : `*${fmt(sellerPrice)}*`);
+
+    if (p.sizes) lines.push(`Sizes: ${p.sizes}`);
+    if (p.has_video) lines.push(`🎥 Customer review video`);
+    lines.push(`🔗 ${p.qrate_url}`);
     lines.push("");
-  }
+  });
 
-  // Price — strikethrough MRP if different from reseller price
-  const mrp   = p.mrp && p.mrp !== p.reseller_selling_price ? fmt(p.mrp) : null;
-  const price = fmt(p.reseller_selling_price);
-  lines.push(mrp ? `*~${mrp}~ ${price}*` : `*${price}*`);
-  lines.push("");
-
-  // Video badge (field from query when available)
-  if (p.has_video) {
-    lines.push("*Actual customer review video added*");
-    lines.push("");
-  }
-
-  // Sizes
-  if (p.sizes) {
-    lines.push(`Sizes: ${p.sizes}`);
-    lines.push("");
-  }
-
-  // Social proof + trust
-  const ordersLabel = fmtOrders(p.orders_last_30d);
-  if (ordersLabel) lines.push(`*${ordersLabel}* orders already placed`);
-  lines.push("Free delivery");
-  lines.push("COD Available");
-  lines.push("Return available");
-  lines.push("Delivery in 4 to 7 days");
-  lines.push("");
-
-  // Price comparisons
-  const sellerPrice = p.reseller_selling_price || 0;
-  if (p.mp_price && p.mp_price > sellerPrice) {
-    const saving  = fmt(p.mp_price - sellerPrice);
-    const mpLabel = p.mp_name
-      ? p.mp_name.charAt(0).toUpperCase() + p.mp_name.slice(1)
-      : "Marketplace";
-    const link = p.mp_link ? ` (Check here: ${p.mp_link})` : "";
-    lines.push(`Cheaper than ${mpLabel} by ${saving}${link}`);
-  }
-  if (p.website_price && p.website_price > sellerPrice) {
-    const saving = fmt(p.website_price - sellerPrice);
-    const link   = p.website_product_link ? ` (Check here: ${p.website_product_link})` : "";
-    lines.push(`Cheaper than brand website by ${saving}${link}`);
-  }
-  if ((p.mp_price && p.mp_price > sellerPrice) || (p.website_price && p.website_price > sellerPrice)) {
-    lines.push("");
-  }
-
-  // Product link
-  lines.push(`*Product link* 🔗 ${p.qrate_url}`);
+  // Shared trust signals
+  const totalOrders = products.reduce((s, p) => s + (p.orders_last_30d || 0), 0);
+  const ordersLabel = fmtOrders(totalOrders);
+  if (ordersLabel) lines.push(`📦 *${ordersLabel}* orders already placed`);
+  lines.push("✅ Free delivery · COD Available · Returns");
+  lines.push("🚚 Delivery in 4 to 7 days");
 
   return lines.join("\n");
-}
-
-// ── Slot header ────────────────────────────────────────────────────────────────
-function buildHeader(products, slot) {
-  const label = SUBCATEGORY_LABELS[products[0]?.clean_product_type] || slot.category;
-  return `🛍️ *${label}* — Today's Bestsellers`;
 }
 
 // ── Main send ─────────────────────────────────────────────────────────────────
@@ -112,30 +74,36 @@ export async function sendSlot(slot) {
 
   const groupJid = await getGroupJid();
 
-  // Header message
-  await client.sendTextMessage(groupJid, buildHeader(products, slot));
-  await new Promise((r) => setTimeout(r, 1500 + Math.random() * 1500));
-
-  // One image+caption per product with human-like delays
+  // 1. Send images as quick burst → WA auto-groups them into an album
   for (let i = 0; i < products.length; i++) {
     const p = products[i];
-    if (i > 0) await new Promise((r) => setTimeout(r, 3000 + Math.random() * 4000));
-
-    const caption = buildCaption(p);
-
     if (p.img_link) {
-      await client.sendImageMessage(groupJid, p.img_link, caption);
-    } else {
-      await client.sendTextMessage(groupJid, caption);
+      try {
+        const response = await fetch(p.img_link);
+        if (response.ok) {
+          const buffer = Buffer.from(await response.arrayBuffer());
+          await client.sock.sendMessage(groupJid, { image: buffer, mimetype: "image/jpeg" });
+        }
+      } catch (e) {
+        console.warn(`[Slot ${slot.hour}h] Image fetch failed for ${p.product_name}:`, e.message);
+      }
     }
+    // Short delay between images — quick enough that WA groups them as album
+    await new Promise((r) => setTimeout(r, 300 + Math.random() * 200));
   }
+
+  // 2. Brief pause before text so album renders first
+  await new Promise((r) => setTimeout(r, 1500));
+
+  // 3. One combined text with all details + individual links
+  const text = buildCombinedText(products, slot);
+  await client.sendTextMessage(groupJid, text);
 
   recordShared(products, slot);
 
   console.log(
     `✓ [${slot.hour}:00] ${slot.category} | ` +
     `${products.length} products | ` +
-    `sub-cat: ${SUBCATEGORY_LABELS[products[0]?.clean_product_type] || "?"} | ` +
-    `scores: ${products.map((p) => p._score?.toFixed(2)).join(", ")}`
+    `sub-cat: ${SUBCATEGORY_LABELS[products[0]?.clean_product_type] || "?"}`
   );
 }
