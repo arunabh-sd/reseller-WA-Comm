@@ -56,6 +56,8 @@ function buildMap(feed, meta) {
       shares_last_7d:            row.shares_last_7d   || 0,
       // Reseller margin: max they can earn per sale (website price - reseller price)
       margin: Math.max(0, (row.website_price || 0) - (row.reseller_selling_price_prepaid || 0)),
+      // How much cheaper than marketplace (0 if exclusive or no mp price)
+      marketplace_gap: Math.max(0, (row.mp_price || 0) - (row.reseller_selling_price_prepaid || 0)),
     });
   }
   return productMap;

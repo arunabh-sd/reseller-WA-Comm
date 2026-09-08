@@ -41,13 +41,17 @@ export function recordShared(products, slotMeta) {
 
   for (const p of products) {
     entries.push({
-      product_id:   p.customer_product_short_id,
-      product_name: p.product_name || "",
-      category:     slotMeta.category,
-      sub_category: p.clean_product_type,
-      price:        p.reseller_selling_price,
-      sent_at:      now,
-      slot_hour:    slotMeta.hour,
+      product_id:      p.customer_product_short_id,
+      product_name:    p.product_name || "",
+      category:        slotMeta.category,
+      sub_category:    p.clean_product_type,
+      aov_bucket:      slotMeta.aovBucket,
+      price:           p.reseller_selling_price || 0,
+      margin:          p.margin || 0,
+      marketplace_gap: p.marketplace_gap || 0,
+      exclusive:       Boolean(p.exclusive),
+      sent_at:         now,
+      slot_hour:       slotMeta.hour,
     });
   }
 

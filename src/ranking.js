@@ -2,7 +2,7 @@ import { getProductMap } from "./cache.js";
 import { CATEGORY_TYPES } from "./config/categories.js";
 import { AOV_BUCKETS, MIN_L30D_ORDERS, PRODUCTS_PER_SHARE } from "./config/schedule.js";
 import { getRecentlyShared } from "./history.js";
-import { loadWeights } from "./learning.js";
+import { loadWeights, loadSubcategoryPerf } from "./learning.js";
 
 // Maps slot category names → category_l1 strings from product_labels.json
 const CATEGORY_L1_MAP = {
@@ -16,6 +16,21 @@ const CATEGORY_L1_MAP = {
 function normalise(arr) {
   const max = Math.max(...arr, 1);
   return arr.map((v) => v / max);
+}
+
+// Average EMA orders across known sub-categories within this slot's valid types
+function categoryAvgOrders(subPerf, validTypes) {
+  const entries = Object.entries(subPerf).filter(([sc]) => validTypes.has(sc));
+  if (!entries.length) return 1;
+  return entries.reduce((s, [, e]) => s + e.ema_orders, 0) / entries.length;
+}
+
+// Historical performance multiplier for a sub-category. Returns 1.0 if not enough data.
+function subcatBoost(subPerf, sc, catAvg) {
+  const entry = subPerf[sc];
+  if (!entry || entry.samples < 3) return 1.0;
+  const ratio = entry.ema_orders / Math.max(catAvg, 0.01);
+  return Math.max(0.7, Math.min(1.5, ratio)); // clamp so one great day doesn't dominate
 }
 
 export async function getRankedForSlot({ category, aovBucket }) {
@@ -40,29 +55,39 @@ export async function getRankedForSlot({ category, aovBucket }) {
 
   if (!candidates.length) return [];
 
-  const normOrders = normalise(candidates.map((p) => p.orders_last_30d));
-  const normPPO    = normalise(candidates.map((p) => p.ppo_last_7d));
-  const normShares = normalise(candidates.map((p) => p.shares_last_7d));
-  const normMargin = normalise(candidates.map((p) => p.margin || 0));
+  // Signals — all normalised 0→1
+  const normOrders    = normalise(candidates.map((p) => p.orders_last_30d));
+  const normPPO       = normalise(candidates.map((p) => p.ppo_last_7d));
+  const normShares    = normalise(candidates.map((p) => p.shares_last_7d));
+  const normMargin    = normalise(candidates.map((p) => p.margin || 0));
+  const normExclusive = candidates.map((p) => (p.exclusive ? 1 : 0)); // already 0/1
+  const normMktGap    = normalise(candidates.map((p) => p.marketplace_gap || 0));
 
   const scored = candidates.map((p, i) => ({
     ...p,
     _score:
-      (weights.l30d_orders || 0.40) * normOrders[i] +
-      (weights.margin      || 0.25) * normMargin[i] +
-      (weights.l7d_views   || 0.20) * normPPO[i]    +
-      (weights.l7d_shares  || 0.15) * normShares[i],
+      (weights.l30d_orders     || 0.40) * normOrders[i]    +
+      (weights.margin          || 0.25) * normMargin[i]    +
+      (weights.l7d_views       || 0.20) * normPPO[i]       +
+      (weights.l7d_shares      || 0.15) * normShares[i]    +
+      (weights.exclusive       || 0.00) * normExclusive[i] +
+      (weights.marketplace_gap || 0.00) * normMktGap[i],
   }));
 
   scored.sort((a, b) => b._score - a._score);
   return scored;
 }
 
-// Pick N products for a slot, grouped by same sub-category where possible
+// Pick N products for a slot, grouped by same sub-category
+// Sub-category selection is influenced by historical performance (subcategory_perf.json)
 export async function pickSlotProducts(slot) {
   const n      = PRODUCTS_PER_SHARE;
   const ranked = await getRankedForSlot(slot);
   if (!ranked.length) return [];
+
+  const subPerf  = loadSubcategoryPerf();
+  const validTypes = new Set(CATEGORY_TYPES[slot.category] || []);
+  const catAvg   = categoryAvgOrders(subPerf, validTypes);
 
   // Group by sub-category
   const groups = new Map();
@@ -72,15 +97,19 @@ export async function pickSlotProducts(slot) {
     groups.get(sc).push(p);
   }
 
-  // Best sub-category: highest sum of scores (proxy for group quality)
-  let best = [];
-  for (const group of groups.values()) {
-    const groupScore = group.slice(0, n).reduce((s, p) => s + p._score, 0);
-    const bestScore  = best.slice(0, n).reduce((s, p) => s + p._score, 0);
-    if (groupScore > bestScore) best = group;
+  // Best group: sum of top-N product scores × historical performance boost
+  let bestKey      = null;
+  let bestEffScore = -Infinity;
+
+  for (const [sc, group] of groups) {
+    const rawScore  = group.slice(0, n).reduce((s, p) => s + p._score, 0);
+    const boost     = subcatBoost(subPerf, sc, catAvg);
+    const effScore  = rawScore * boost;
+    if (effScore > bestEffScore) { bestEffScore = effScore; bestKey = sc; }
   }
 
-  // Never mix sub-categories — take however many the best group has (min 2)
+  const best = groups.get(bestKey) || [];
+  // Never mix sub-categories — require at least 2 from the same group
   if (best.length < 2) return [];
   return best.slice(0, n);
 }
