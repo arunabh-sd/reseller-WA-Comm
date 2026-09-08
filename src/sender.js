@@ -3,16 +3,38 @@ import { pickSlotProducts } from "./ranking.js";
 import { recordShared } from "./history.js";
 import { SUBCATEGORY_LABELS } from "./config/categories.js";
 
-const GROUP_NAME = process.env.WA_COMMUNITY_GROUP_NAME || "ShopDeck Resellers";
+// Targets (resolved once, then cached)
+const TARGET_GROUP      = process.env.WA_GROUP_NAME      || "";
+const TARGET_COMMUNITY_1 = process.env.WA_COMMUNITY_1   || "";
+const TARGET_COMMUNITY_2 = process.env.WA_COMMUNITY_2   || "";
 
-let cachedGroupJid = null;
+let cachedTargetJids = null;
 
-async function getGroupJid() {
-  if (cachedGroupJid) return cachedGroupJid;
-  const group = await client.findGroupByName(GROUP_NAME);
-  if (!group) throw new Error(`Group "${GROUP_NAME}" not found — check WA_COMMUNITY_GROUP_NAME`);
-  cachedGroupJid = group.id;
-  return cachedGroupJid;
+async function getTargetJids() {
+  if (cachedTargetJids) return cachedTargetJids;
+
+  const jids = [];
+
+  if (TARGET_COMMUNITY_1) {
+    const g = await client.findCommunityAnnouncements(TARGET_COMMUNITY_1);
+    if (g) jids.push(g.id);
+    else console.warn(`[Sender] Announcements not found in community: ${TARGET_COMMUNITY_1}`);
+  }
+  if (TARGET_COMMUNITY_2) {
+    const g = await client.findCommunityAnnouncements(TARGET_COMMUNITY_2);
+    if (g) jids.push(g.id);
+    else console.warn(`[Sender] Announcements not found in community: ${TARGET_COMMUNITY_2}`);
+  }
+  if (TARGET_GROUP) {
+    const g = await client.findGroupByName(TARGET_GROUP);
+    if (g) jids.push(g.id);
+    else console.warn(`[Sender] Group not found: ${TARGET_GROUP}`);
+  }
+
+  if (!jids.length) throw new Error("No valid WA targets found — check WA_GROUP_NAME / WA_COMMUNITY_1 / WA_COMMUNITY_2");
+  cachedTargetJids = jids;
+  console.log(`[Sender] Resolved ${jids.length} target(s):`, jids);
+  return jids;
 }
 
 // ── Festival calendar ─────────────────────────────────────────────────────────
@@ -112,30 +134,42 @@ export async function sendSlot(slot) {
     return;
   }
 
-  const groupJid = await getGroupJid();
+  const targetJids = await getTargetJids();
 
-  // 1. Quick image burst → WA auto-albums them
-  for (let i = 0; i < products.length; i++) {
-    const p = products[i];
-    if (p.img_link) {
+  // Pre-fetch all images once (avoid re-fetching per target)
+  const buffers = await Promise.all(
+    products.map(async (p) => {
+      if (!p.img_link) return null;
       try {
-        const response = await fetch(p.img_link);
-        if (response.ok) {
-          const buffer = Buffer.from(await response.arrayBuffer());
-          await client.sock.sendMessage(groupJid, { image: buffer, mimetype: "image/jpeg" });
-        }
-      } catch (e) {
-        console.warn(`Image fetch failed for ${p.product_name}:`, e.message);
+        const res = await fetch(p.img_link);
+        return res.ok ? Buffer.from(await res.arrayBuffer()) : null;
+      } catch {
+        return null;
       }
+    })
+  );
+
+  const text = buildCombinedText(products, slot);
+
+  // Send to each target
+  for (const jid of targetJids) {
+    // 1. Quick image burst → WA auto-albums them
+    for (let i = 0; i < products.length; i++) {
+      if (buffers[i]) {
+        await client.sock.sendMessage(jid, { image: buffers[i], mimetype: "image/jpeg" });
+      }
+      await new Promise((r) => setTimeout(r, 300 + Math.random() * 200));
     }
-    await new Promise((r) => setTimeout(r, 300 + Math.random() * 200));
+    // 2. Brief pause so album renders first
+    await new Promise((r) => setTimeout(r, 1500));
+    // 3. One combined text
+    await client.sendTextMessage(jid, text);
+
+    // Gap between targets to avoid flood detection
+    if (targetJids.indexOf(jid) < targetJids.length - 1) {
+      await new Promise((r) => setTimeout(r, 3000 + Math.random() * 2000));
+    }
   }
-
-  // 2. Brief pause so album renders first
-  await new Promise((r) => setTimeout(r, 1500));
-
-  // 3. One combined text
-  await client.sendTextMessage(groupJid, buildCombinedText(products, slot));
 
   recordShared(products, slot);
 

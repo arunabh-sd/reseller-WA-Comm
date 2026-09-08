@@ -72,9 +72,36 @@ class WhatsAppClient extends EventEmitter {
     if (!this.sock) throw new Error("Not connected");
     const groups = await this.sock.groupFetchAllParticipating();
     const match = Object.values(groups).find(
-      (g) => g.subject.trim().toLowerCase() === name.trim().toLowerCase()
+      (g) => g.subject?.trim().toLowerCase() === name.trim().toLowerCase()
     );
     return match || null;
+  }
+
+  // Find the "Announcements" sub-group inside a WhatsApp community
+  async findCommunityAnnouncements(communityName) {
+    if (!this.sock) throw new Error("Not connected");
+    const groups = await this.sock.groupFetchAllParticipating();
+    const all = Object.values(groups);
+
+    // The community itself appears as a group in the list
+    const community = all.find(
+      (g) => g.subject?.trim().toLowerCase() === communityName.trim().toLowerCase()
+    );
+    if (!community) {
+      console.warn(`[WA] Community not found: "${communityName}"`);
+      return null;
+    }
+
+    // Sub-groups linked to this community have linkedParent === community.id
+    const announcements = all.find(
+      (g) =>
+        g.linkedParent === community.id &&
+        g.subject?.trim().toLowerCase() === "announcements"
+    );
+    if (!announcements) {
+      console.warn(`[WA] No Announcements sub-group found in "${communityName}"`);
+    }
+    return announcements || null;
   }
 
   async sendImageMessage(groupJid, imageUrl, caption) {
