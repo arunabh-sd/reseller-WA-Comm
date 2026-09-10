@@ -58,16 +58,14 @@ export async function fetchPerformanceForDate(dateStr) {
 }
 
 // Card 13897 — today's order totals (total_orders, new/repeat orderers)
-// Has a manual date filter — we pass today's IST date
-// Check your Metabase card for the exact template-tag name; default assumed is "date"
-const ORDERS_DATE_TAG = process.env.ORDERS_DATE_TAG || "date";
-
+// Uses start_date + end_date manual filters; both set to today IST
 export async function fetchTodayOrders() {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
   try {
     const { data } = await mb.post(`/api/card/13897/query/json`, {
       parameters: [
-        { type: "date/single", target: ["variable", ["template-tag", ORDERS_DATE_TAG]], value: today },
+        { type: "date/single", target: ["variable", ["template-tag", "start_date"]], value: today },
+        { type: "date/single", target: ["variable", ["template-tag", "end_date"]],   value: today },
       ],
     });
     const rows = Array.isArray(data) ? data : [];
