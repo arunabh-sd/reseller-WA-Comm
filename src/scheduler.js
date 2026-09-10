@@ -2,6 +2,7 @@ import cron from "node-cron";
 import { DAILY_SLOTS } from "./config/schedule.js";
 import { sendSlot } from "./sender.js";
 import { runDailyLearning } from "./learning.js";
+import { checkOrders } from "./orders.js";
 import client from "./client/whatsapp.js";
 
 export function startScheduler() {
@@ -30,6 +31,16 @@ export function startScheduler() {
       } catch (err) {
         console.error("[Learning] Daily run failed:", err.message);
       }
+    },
+    { timezone: "Asia/Kolkata" }
+  );
+
+  // Order polling — every 5 minutes during business hours (8am–11pm IST)
+  cron.schedule(
+    "*/5 8-23 * * *",
+    async () => {
+      try { await checkOrders(); }
+      catch (err) { console.error("[Orders] Poll failed:", err.message); }
     },
     { timezone: "Asia/Kolkata" }
   );

@@ -105,6 +105,41 @@ function buildCombinedText(products, slot) {
   return lines.join("\n");
 }
 
+// ── Image fetch with timeout + content-type guard + single retry ──────────────
+// All retries happen here, BEFORE any WA send — never re-send to communities
+async function fetchImage(url, attempt = 1) {
+  const controller = new AbortController();
+  const timer      = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) {
+      console.warn(`[img] HTTP ${res.status} for ${url.slice(0, 80)}`);
+      return null;
+    }
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.startsWith("image/")) {
+      console.warn(`[img] Non-image content-type "${ct}" — skipping ${url.slice(0, 80)}`);
+      return null;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length < 1024) {
+      console.warn(`[img] Suspiciously small buffer (${buf.length}B) — skipping ${url.slice(0, 80)}`);
+      return null;
+    }
+    return buf;
+  } catch (err) {
+    clearTimeout(timer);
+    if (attempt === 1) {
+      console.warn(`[img] Fetch failed (attempt 1), retrying: ${err.message}`);
+      await new Promise((r) => setTimeout(r, 1500));
+      return fetchImage(url, 2);
+    }
+    console.warn(`[img] Failed after retry — dropping image: ${url.slice(0, 80)}`);
+    return null;
+  }
+}
+
 // ── Main send ─────────────────────────────────────────────────────────────────
 export async function sendSlot(slot, communitiesOnly = false) {
   const products = await pickSlotProducts(slot);
@@ -116,18 +151,14 @@ export async function sendSlot(slot, communitiesOnly = false) {
 
   const targetJids = await getTargetJids(communitiesOnly);
 
-  // Pre-fetch all images once (avoid re-fetching per target)
+  // Pre-fetch ALL images with timeout+retry BEFORE sending anything to WA.
+  // If an image fails here, we skip it — we never re-send to groups.
   const buffers = await Promise.all(
-    products.map(async (p) => {
-      if (!p.img_link) return null;
-      try {
-        const res = await fetch(p.img_link);
-        return res.ok ? Buffer.from(await res.arrayBuffer()) : null;
-      } catch {
-        return null;
-      }
-    })
+    products.map((p) => p.img_link ? fetchImage(p.img_link) : Promise.resolve(null))
   );
+
+  const validImages = buffers.filter(Boolean).length;
+  console.log(`[Slot] Images: ${validImages}/${products.length} loaded`);
 
   const text = buildCombinedText(products, slot);
 

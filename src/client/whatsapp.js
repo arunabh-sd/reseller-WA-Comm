@@ -36,6 +36,21 @@ class WhatsAppClient extends EventEmitter {
 
     this.sock.ev.on("creds.update", saveCreds);
 
+    // Forward incoming messages so other modules can react (e.g. "Yes" for pending changes)
+    this.sock.ev.on("messages.upsert", ({ messages, type }) => {
+      if (type !== "notify") return;
+      for (const msg of messages) {
+        if (msg.key.fromMe) continue;
+        if (!msg.message) continue;
+        const text = (
+          msg.message.conversation ||
+          msg.message.extendedTextMessage?.text ||
+          ""
+        ).trim();
+        if (text) this.emit("message", { jid: msg.key.remoteJid, text, key: msg.key });
+      }
+    });
+
     this.sock.ev.on("connection.update", (update) => {
       const { connection, lastDisconnect, qr } = update;
 

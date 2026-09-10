@@ -1,22 +1,24 @@
+import Anthropic from "@anthropic-ai/sdk";
 import { readFileSync, writeFileSync, mkdirSync } from "fs";
 import { join } from "path";
 import { getSharedOnDate } from "./history.js";
 import { fetchPerformanceForDate } from "./metabase.js";
+import { getProductMap } from "./cache.js";
+import { savePending, TEST_GROUP_JID } from "./pending_changes.js";
 
-const DATA_DIR        = process.env.DATA_DIR || "data";
-const WEIGHTS_FILE    = join(DATA_DIR, "weights.json");
-const PERF_FILE       = join(DATA_DIR, "performance_log.json");
+const DATA_DIR         = process.env.DATA_DIR || "data";
+const WEIGHTS_FILE     = join(DATA_DIR, "weights.json");
 const SUBCAT_PERF_FILE = join(DATA_DIR, "subcategory_perf.json");
 
-const TEST_GROUP_JID = "120363431273030908@g.us"; // "Test" group
+const SUBCAT_ALPHA = 0.3;
 
 const DEFAULT_WEIGHTS = {
   l30d_orders:     0.40,
   margin:          0.25,
   l7d_views:       0.20,
   l7d_shares:      0.15,
-  exclusive:       0.00, // learned — boosted if exclusive products outperform
-  marketplace_gap: 0.00, // learned — boosted if price-gap products outperform
+  exclusive:       0.00,
+  marketplace_gap: 0.00,
 };
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -32,294 +34,269 @@ function writeJson(path, data) {
 export function loadWeights() {
   return { ...DEFAULT_WEIGHTS, ...readJson(WEIGHTS_FILE, {}) };
 }
-
 export function loadSubcategoryPerf() {
   return readJson(SUBCAT_PERF_FILE, {});
 }
 
-// ── Correlation analysis ──────────────────────────────────────────────────────
+// ── Auto-detect 14915 field names ─────────────────────────────────────────────
+// Card 14915 was updated by the user — we don't hardcode column names
 
-function avg(items, key) {
-  if (!items.length) return 0;
-  return items.reduce((s, e) => s + (e[key] || 0), 0) / items.length;
+function detectFields(row) {
+  const pick = (...candidates) =>
+    candidates.find((c) => row[c] != null) || candidates[0];
+
+  return {
+    id:     pick("customer_product_short_id", "product_id", "sku_id", "id"),
+    orders: pick("total_orders",    "orders",  "reseller_orders", "order_count"),
+    ppo:    pick("total_ppo",       "ppo",     "product_page_opens", "ppo_count", "views"),
+    shares: pick("total_shares",    "shares",  "product_shares",  "share_count"),
+    name:   pick("product_name",    "name",    "title",           "product_title"),
+  };
 }
 
-function groupBy(items, key) {
-  const result = {};
-  for (const item of items) {
-    const k = String(item[key] ?? "unknown");
-    if (!result[k]) result[k] = [];
-    result[k].push(item);
+// ── Sub-category EMA update (runs automatically, no confirmation needed) ──────
+
+function updateSubcategoryPerf(sharedEntries) {
+  const bySub = {};
+  for (const e of sharedEntries) {
+    const sc = e.sub_category || "unknown";
+    if (!bySub[sc]) bySub[sc] = [];
+    bySub[sc].push(e.total_orders || 0);
   }
-  return result;
-}
-
-function analyzeCorrelations(entries) {
-  // 1. By sub-category
-  const bySub = groupBy(entries, "sub_category");
-  const bySubCat = Object.entries(bySub)
-    .map(([label, items]) => ({
-      label,
-      avg_orders: avg(items, "total_orders"),
-      avg_ppo:    avg(items, "total_ppo"),
-      count:      items.length,
-    }))
-    .sort((a, b) => b.avg_orders - a.avg_orders);
-
-  // 2. By AOV bucket
-  const byAov = groupBy(entries, "aov_bucket");
-  const byAovBucket = Object.entries(byAov)
-    .map(([label, items]) => ({
-      label,
-      avg_orders: avg(items, "total_orders"),
-      count:      items.length,
-    }))
-    .sort((a, b) => b.avg_orders - a.avg_orders);
-
-  // 3. Exclusive vs non-exclusive
-  const excl    = entries.filter((e) => e.exclusive);
-  const nonExcl = entries.filter((e) => !e.exclusive);
-  const exclusiveCorr = {
-    exclusive_avg:     avg(excl,    "total_orders"),
-    non_exclusive_avg: avg(nonExcl, "total_orders"),
-    exclusive_count:   excl.length,
-    non_exclusive_count: nonExcl.length,
-  };
-
-  // 4. Marketplace gap band (no gap / small ≤500 / big >500)
-  const noGap    = entries.filter((e) => (e.marketplace_gap || 0) === 0);
-  const smallGap = entries.filter((e) => (e.marketplace_gap || 0) > 0 && e.marketplace_gap <= 500);
-  const bigGap   = entries.filter((e) => (e.marketplace_gap || 0) > 500);
-  const mktGapCorr = [
-    { label: "No gap",   avg_orders: avg(noGap,    "total_orders"), count: noGap.length },
-    { label: "Gap ≤₹500", avg_orders: avg(smallGap, "total_orders"), count: smallGap.length },
-    { label: "Gap >₹500", avg_orders: avg(bigGap,   "total_orders"), count: bigGap.length },
-  ].filter((x) => x.count > 0);
-
-  // 5. By time band
-  const timeBands = {
-    "Morning (9–12)":   entries.filter((e) => e.slot_hour >= 9  && e.slot_hour < 12),
-    "Afternoon (12–15)": entries.filter((e) => e.slot_hour >= 12 && e.slot_hour < 15),
-    "Evening (15–18)":  entries.filter((e) => e.slot_hour >= 15 && e.slot_hour < 18),
-    "Night (18–20)":    entries.filter((e) => e.slot_hour >= 18),
-  };
-  const byTimeBand = Object.entries(timeBands)
-    .filter(([, items]) => items.length > 0)
-    .map(([label, items]) => ({
-      label,
-      avg_orders: avg(items, "total_orders"),
-      count:      items.length,
-    }))
-    .sort((a, b) => b.avg_orders - a.avg_orders);
-
-  return { bySubCat, byAovBucket, exclusiveCorr, mktGapCorr, byTimeBand };
-}
-
-// ── Sub-category performance EMA update ───────────────────────────────────────
-
-const SUBCAT_ALPHA = 0.3; // EMA smoothing — 30% weight to today, 70% to history
-
-function updateSubcategoryPerf(bySubCat) {
   const existing = loadSubcategoryPerf();
-  for (const { label, avg_orders, count } of bySubCat) {
-    if (!label || label === "unknown") continue;
-    const prev = existing[label];
-    if (!prev) {
-      existing[label] = { ema_orders: avg_orders, samples: count };
-    } else {
-      existing[label] = {
-        ema_orders: SUBCAT_ALPHA * avg_orders + (1 - SUBCAT_ALPHA) * prev.ema_orders,
-        samples:    prev.samples + count,
-      };
-    }
+  for (const [sc, orderArr] of Object.entries(bySub)) {
+    if (sc === "unknown") continue;
+    const dayAvg = orderArr.reduce((s, v) => s + v, 0) / orderArr.length;
+    const prev   = existing[sc];
+    existing[sc] = prev
+      ? { ema_orders: SUBCAT_ALPHA * dayAvg + (1 - SUBCAT_ALPHA) * prev.ema_orders, samples: prev.samples + orderArr.length }
+      : { ema_orders: dayAvg, samples: orderArr.length };
   }
   writeJson(SUBCAT_PERF_FILE, existing);
-  return existing;
 }
 
-// ── Weight adjustment ─────────────────────────────────────────────────────────
+// ── AI analysis via Claude ────────────────────────────────────────────────────
 
-function adjustWeights(entries, corr) {
-  const w = loadWeights();
-
-  // Basic overall adjustments (existing logic)
-  const orderRate = entries.filter((e) => e.total_orders > 0).length / Math.max(entries.length, 1);
-  const shareAvg  = avg(entries, "total_shares");
-
-  if (orderRate > 0.3 && shareAvg > 2) {
-    w.l7d_shares  = Math.min((w.l7d_shares  || 0.15) + 0.02, 0.35);
-    w.l30d_orders = Math.max((w.l30d_orders || 0.40) - 0.01, 0.25);
-  }
-  if (orderRate < 0.1) {
-    w.l7d_views   = Math.min((w.l7d_views   || 0.20) + 0.02, 0.35);
-    w.l7d_shares  = Math.max((w.l7d_shares  || 0.15) - 0.01, 0.10);
-  }
-
-  // Exclusive signal: if exclusive products convert >1.5x better, bump weight
-  const { exclusive_avg, non_exclusive_avg, exclusive_count } = corr.exclusiveCorr;
-  if (exclusive_count >= 3) {
-    const ratio = exclusive_avg / Math.max(non_exclusive_avg, 0.01);
-    if (ratio > 1.5) {
-      w.exclusive = Math.min((w.exclusive || 0) + 0.03, 0.15);
-    } else if (ratio < 0.8) {
-      w.exclusive = Math.max((w.exclusive || 0) - 0.01, 0);
-    }
-  }
-
-  // Marketplace gap signal: if gap>₹500 converts >1.5x better than no-gap products
-  const bigGapRow = corr.mktGapCorr.find((r) => r.label === "Gap >₹500");
-  const noGapRow  = corr.mktGapCorr.find((r) => r.label === "No gap");
-  if (bigGapRow && noGapRow && bigGapRow.count >= 3) {
-    const mktRatio = bigGapRow.avg_orders / Math.max(noGapRow.avg_orders, 0.01);
-    if (mktRatio > 1.5) {
-      w.marketplace_gap = Math.min((w.marketplace_gap || 0) + 0.03, 0.15);
-    } else if (mktRatio < 0.8) {
-      w.marketplace_gap = Math.max((w.marketplace_gap || 0) - 0.01, 0);
-    }
-  }
-
-  // Normalise all weights so they sum to 1
-  const total = Object.values(w).reduce((s, v) => s + v, 0);
-  if (total > 0) {
-    for (const k of Object.keys(w)) w[k] = +((w[k] || 0) / total).toFixed(4);
-  }
-
-  writeJson(WEIGHTS_FILE, w);
-  return w;
+function productLine(p) {
+  return `${p.product_name || p.product_id} | ${p.sub_category || "?"} | ₹${p.price || "?"} | ` +
+         `${p.aov_bucket || "?"} AOV | ${p.exclusive ? "excl" : "std"} | ₹${p.margin || 0} margin | ` +
+         `${p.total_orders}orders ${p.total_ppo}PPO ${p.total_shares}shares`;
 }
 
-// ── Summary text ──────────────────────────────────────────────────────────────
+function organicLine(p, fields) {
+  return `${p[fields.name] || p[fields.id]} | ${p[fields.id]} | ` +
+         `${p[fields.orders] || 0}orders ${p[fields.ppo] || 0}PPO ${p[fields.shares] || 0}shares`;
+}
 
-function fmtN(n) { return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n); }
+async function callClaude(dateStr, sharedEntries, organicRows, fields, currentWeights) {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.warn("[Learning] ANTHROPIC_API_KEY not set — skipping AI analysis");
+    return null;
+  }
 
-function buildSummaryText(dateStr, entries, corr, oldWeights, newWeights) {
-  const lines = [];
-  lines.push(`📊 *Daily Learning — ${dateStr}*`);
-  lines.push("");
+  const ordered     = sharedEntries.filter((p) => p.total_orders >= 1).sort((a, b) => b.total_orders - a.total_orders);
+  const highShares  = sharedEntries.filter((p) => p.total_shares > 3).sort((a, b) => b.total_shares - a.total_shares);
+  const highPPO     = sharedEntries.filter((p) => p.total_ppo > 10).sort((a, b) => b.total_ppo - a.total_ppo);
+  const missed      = sharedEntries.filter((p) => p.total_orders < 1 && p.total_shares <= 3 && p.total_ppo <= 10);
 
-  // Totals
-  const cats = {};
-  for (const e of entries) cats[e.category] = (cats[e.category] || 0) + 1;
-  lines.push(`*Shared:* ${entries.length} products — ${Object.entries(cats).map(([c, n]) => `${c} ×${n}`).join(", ")}`);
-  const totalOrders = entries.reduce((s, e) => s + (e.total_orders || 0), 0);
-  const totalPPO    = entries.reduce((s, e) => s + (e.total_ppo    || 0), 0);
-  const totalShares = entries.reduce((s, e) => s + (e.total_shares || 0), 0);
-  lines.push(`Orders: ${fmtN(totalOrders)} · PPO: ${fmtN(totalPPO)} · Shares: ${fmtN(totalShares)}`);
-  lines.push("");
+  const organicHit  = organicRows.filter((r) =>
+    (r[fields.orders] || 0) >= 1 || (r[fields.shares] || 0) > 3 || (r[fields.ppo] || 0) > 10
+  ).sort((a, b) => (b[fields.orders] || 0) - (a[fields.orders] || 0));
 
-  // Sub-category breakdown (top 4 + bottom mention)
-  if (corr.bySubCat.length) {
-    lines.push("*Sub-category performance:*");
-    const top = corr.bySubCat.slice(0, 4);
-    for (const s of top) {
-      lines.push(`• ${s.label}: ${s.avg_orders.toFixed(1)} avg orders (${s.count} products)`);
+  const prompt = `You are the analytics brain for ShopDeck's WhatsApp reseller broadcaster.
+Yesterday (${dateStr}) we shared ${sharedEntries.length} products to ~3 reseller WA groups.
+
+SHARED → GOT ≥1 ORDER (${ordered.length}):
+${ordered.slice(0, 6).map(productLine).join("\n") || "none"}
+
+SHARED → GOT >3 SHARES (${highShares.length}):
+${highShares.slice(0, 4).map(productLine).join("\n") || "none"}
+
+SHARED → GOT >10 PPO (${highPPO.length}):
+${highPPO.slice(0, 4).map(productLine).join("\n") || "none"}
+
+SHARED → MISSED ALL BUCKETS (${missed.length}):
+${missed.slice(0, 5).map(productLine).join("\n") || "none"}
+
+ORGANIC PERFORMERS — not shared by us, but hit a bucket (${organicHit.length}):
+${organicHit.slice(0, 5).map((r) => organicLine(r, fields)).join("\n") || "none"}
+
+Current ranking weights: ${JSON.stringify(currentWeights, null, 2)}
+(l7d_views = PPO weight; exclusive and marketplace_gap start at 0 and are learned)
+
+Analyse patterns: price point, sub-category, exclusivity, margin, AOV bucket, and what organic performers suggest we're missing.
+
+Reply in EXACTLY this format — keep it short, this goes on WhatsApp:
+
+INSIGHTS:
+• [pattern in high-performers vs misses — be specific about what worked]
+• [insight about organic performers — what should we have shared but didn't?]
+• [one more actionable finding]
+
+RECOMMENDATION:
+[Single sentence, max 20 words — what one thing should we change tomorrow?]
+
+WEIGHT_JSON:
+{"l30d_orders": 0.xx, "margin": 0.xx, "l7d_views": 0.xx, "l7d_shares": 0.xx, "exclusive": 0.xx, "marketplace_gap": 0.xx}
+(all weights must sum to 1.0; only change if data is clear; keep existing if unsure)`;
+
+  const anthropic = new Anthropic({ apiKey });
+  const msg = await anthropic.messages.create({
+    model:      "claude-haiku-4-5-20251001",
+    max_tokens: 700,
+    messages:   [{ role: "user", content: prompt }],
+  });
+
+  return msg.content[0]?.text || null;
+}
+
+function parseAIResponse(text) {
+  if (!text) return { insights: null, recommendation: null, weights: null };
+
+  const insightsMatch     = text.match(/INSIGHTS:\s*([\s\S]*?)(?=RECOMMENDATION:|WEIGHT_JSON:|$)/i);
+  const recommendMatch    = text.match(/RECOMMENDATION:\s*([^\n]+)/i);
+  const weightJsonMatch   = text.match(/WEIGHT_JSON:\s*(\{[\s\S]*?\})/i);
+
+  let weights = null;
+  if (weightJsonMatch) {
+    try {
+      const parsed = JSON.parse(weightJsonMatch[1]);
+      const total  = Object.values(parsed).reduce((s, v) => s + v, 0);
+      // Accept if weights sum roughly to 1
+      if (total > 0.95 && total < 1.05) {
+        weights = {};
+        for (const [k, v] of Object.entries(parsed)) weights[k] = +v.toFixed(4);
+      } else {
+        console.warn("[Learning] AI weight JSON doesn't sum to 1 — ignoring");
+      }
+    } catch {
+      console.warn("[Learning] Failed to parse AI weight JSON");
     }
-    if (corr.bySubCat.length > 4) {
-      const worst = corr.bySubCat[corr.bySubCat.length - 1];
-      lines.push(`• Worst: ${worst.label} — ${worst.avg_orders.toFixed(1)} avg orders`);
-    }
-    lines.push("");
   }
 
-  // AOV bucket
-  if (corr.byAovBucket.length > 1) {
-    const best = corr.byAovBucket[0];
-    lines.push(`*AOV:* ${best.label} bucket led — ${best.avg_orders.toFixed(1)} avg orders (vs ${corr.byAovBucket.slice(1).map((b) => `${b.label}: ${b.avg_orders.toFixed(1)}`).join(", ")})`);
-    lines.push("");
-  }
-
-  // Exclusive vs standard
-  const { exclusive_avg, non_exclusive_avg, exclusive_count, non_exclusive_count } = corr.exclusiveCorr;
-  if (exclusive_count > 0) {
-    const ratio = exclusive_avg / Math.max(non_exclusive_avg, 0.01);
-    const tag   = ratio > 1.5 ? " ↑ boosting exclusive weight" : ratio < 0.8 ? " (no edge)" : "";
-    lines.push(`*Exclusive (${exclusive_count}):* ${exclusive_avg.toFixed(1)} orders · *Standard (${non_exclusive_count}):* ${non_exclusive_avg.toFixed(1)} orders${tag}`);
-    lines.push("");
-  }
-
-  // Marketplace gap
-  if (corr.mktGapCorr.length > 1) {
-    const parts = corr.mktGapCorr.map((r) => `${r.label}: ${r.avg_orders.toFixed(1)}`).join(" · ");
-    lines.push(`*Price gap vs marketplace:* ${parts}`);
-    lines.push("");
-  }
-
-  // Time band
-  if (corr.byTimeBand.length > 1) {
-    const best = corr.byTimeBand[0];
-    lines.push(`*Best time:* ${best.label} — ${best.avg_orders.toFixed(1)} avg orders`);
-    lines.push("");
-  }
-
-  // Weight changes
-  const changed = Object.keys(newWeights).filter(
-    (k) => Math.abs((newWeights[k] || 0) - (oldWeights[k] || 0)) > 0.0005
-  );
-  if (changed.length) {
-    lines.push("*Weight adjustments:*");
-    for (const k of changed) {
-      const arrow = newWeights[k] > (oldWeights[k] || 0) ? "↑" : "↓";
-      lines.push(`${k}: ${(oldWeights[k] || 0).toFixed(3)} → ${newWeights[k].toFixed(3)} ${arrow}`);
-    }
-  } else {
-    lines.push("*Weights:* no change today");
-  }
-
-  return lines.join("\n");
+  return {
+    insights:       insightsMatch?.[1]?.trim()   || null,
+    recommendation: recommendMatch?.[1]?.trim()  || null,
+    weights,
+  };
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 export async function runDailyLearning(client) {
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  const dateStr = yesterday.toISOString().split("T")[0];
+  // Use IST date for "yesterday"
+  const todayIST = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+  const [y, m, d] = todayIST.split("-").map(Number);
+  const dateStr   = new Date(Date.UTC(y, m - 1, d - 1)).toISOString().split("T")[0]; // YYYY-MM-DD
 
-  console.log(`[Learning] Evaluating ${dateStr}…`);
+  console.log(`[Learning] Evaluating IST date: ${dateStr}`);
 
+  // 1. What we shared yesterday
   const sent = getSharedOnDate(dateStr);
   if (!sent.length) {
-    console.log("[Learning] Nothing sent yesterday — skipping");
+    console.log("[Learning] Nothing in shared_history for", dateStr);
     if (client?.isReady) {
-      await client.sendTextMessage(TEST_GROUP_JID, `📊 *Daily Learning — ${dateStr}*\n\nNothing was shared yesterday.`);
+      await client.sendTextMessage(TEST_GROUP_JID,
+        `📊 *Daily Learning — ${dateStr}*\n\nNothing was shared yesterday.`);
     }
     return;
   }
 
-  const perf    = await fetchPerformanceForDate(dateStr);
-  const perfMap = Object.fromEntries(perf.map((r) => [r.customer_product_short_id, r]));
+  // 2. Fetch card 14915 for all products on that date
+  const perf14915 = await fetchPerformanceForDate(dateStr);
+  if (!perf14915.length) {
+    console.warn("[Learning] Card 14915 returned no data for", dateStr);
+  }
 
-  const entries = sent.map((e) => {
-    const p = perfMap[e.product_id] || {};
+  // 3. Auto-detect field names from first row
+  const fields = perf14915.length ? detectFields(perf14915[0]) : {
+    id: "customer_product_short_id", orders: "total_orders", ppo: "total_ppo", shares: "total_shares", name: "product_name",
+  };
+  console.log(`[Learning] 14915 field mapping: id=${fields.id} orders=${fields.orders} ppo=${fields.ppo} shares=${fields.shares}`);
+
+  // 4. Build perfMap keyed by the detected ID field
+  const perfMap = new Map(perf14915.map((r) => [String(r[fields.id]), r]));
+
+  // 5. Cross-reference shared products with 14915 performance
+  const sharedSet = new Set(sent.map((e) => String(e.product_id)));
+  const sharedEntries = sent.map((e) => {
+    const r = perfMap.get(String(e.product_id)) || {};
     return {
       ...e,
-      total_orders: p.total_orders ?? 0,
-      total_ppo:    p.total_ppo    ?? 0,
-      total_shares: p.total_shares ?? 0,
+      total_orders: Number(r[fields.orders] ?? 0),
+      total_ppo:    Number(r[fields.ppo]    ?? 0),
+      total_shares: Number(r[fields.shares] ?? 0),
     };
   });
 
-  // Persist raw log
-  const log = readJson(PERF_FILE, []);
-  log.push(...entries);
-  writeJson(PERF_FILE, log);
+  const matched = sharedEntries.filter((e) => e.total_orders > 0 || e.total_ppo > 0 || e.total_shares > 0).length;
+  console.log(`[Learning] Shared: ${sharedEntries.length} | matched to 14915: ${matched}`);
+  if (matched === 0 && perf14915.length > 0) {
+    console.warn("[Learning] 0 shared products matched 14915 — check field names above and verify product IDs align");
+  }
 
-  // Correlation analysis
-  const corr = analyzeCorrelations(entries);
+  // 6. Organic performers: in 14915 but NOT shared by us, and hit at least one bucket
+  const organicRows = perf14915.filter((r) => {
+    const id = String(r[fields.id]);
+    if (sharedSet.has(id)) return false;
+    return (r[fields.orders] || 0) >= 1 || (r[fields.shares] || 0) > 3 || (r[fields.ppo] || 0) > 10;
+  });
+  console.log(`[Learning] Organic performers: ${organicRows.length}`);
 
-  // Update sub-category performance memory (EMA)
-  updateSubcategoryPerf(corr.bySubCat);
+  // 7. Update sub-category EMA (internal, auto — no confirmation needed)
+  updateSubcategoryPerf(sharedEntries);
 
-  // Adjust weights
-  const oldWeights = loadWeights();
-  const newWeights = adjustWeights(entries, corr);
+  // 8. Call Claude for AI analysis
+  const currentWeights = loadWeights();
+  const aiText         = await callClaude(dateStr, sharedEntries, organicRows, fields, currentWeights);
+  const { insights, recommendation, weights: recommendedWeights } = parseAIResponse(aiText);
 
-  console.log(`[Learning] ${entries.length} products | orders: ${entries.reduce((s, e) => s + e.total_orders, 0)} | weights:`, newWeights);
+  // 9. Build summary message
+  const ordered    = sharedEntries.filter((e) => e.total_orders >= 1).length;
+  const highShares = sharedEntries.filter((e) => e.total_shares > 3).length;
+  const highPPO    = sharedEntries.filter((e) => e.total_ppo > 10).length;
 
-  // Send summary to Test group
+  const lines = [
+    `📊 *Daily Learning — ${dateStr}*`,
+    "",
+    `*Shared:* ${sharedEntries.length} products`,
+    `≥1 order: ${ordered} · >3 shares: ${highShares} · >10 PPO: ${highPPO}`,
+    `Organic hits (not shared by us): ${organicRows.length}`,
+    "",
+  ];
+
+  if (insights) {
+    lines.push("*AI Insights:*");
+    lines.push(insights);
+    lines.push("");
+  }
+  if (recommendation) {
+    lines.push(`*Recommendation:* ${recommendation}`);
+    lines.push("");
+  }
+  if (recommendedWeights) {
+    const changes = Object.keys(recommendedWeights)
+      .filter((k) => Math.abs((recommendedWeights[k] || 0) - (currentWeights[k] || 0)) > 0.001)
+      .map((k) => `${k}: ${(currentWeights[k] || 0).toFixed(3)} → ${recommendedWeights[k].toFixed(3)}`);
+    if (changes.length) {
+      lines.push(`*Proposed changes:* ${changes.join(" · ")}`);
+      lines.push("");
+      lines.push("Reply *Yes* to apply, or ignore to keep current settings.");
+      savePending({ weights: recommendedWeights });
+    } else {
+      lines.push("*Weights:* no changes recommended.");
+    }
+  } else if (aiText) {
+    lines.push("_(No weight changes parsed from AI response)_");
+  }
+
+  const summary = lines.join("\n");
+
   if (client?.isReady) {
-    const summary = buildSummaryText(dateStr, entries, corr, oldWeights, newWeights);
     await client.sendTextMessage(TEST_GROUP_JID, summary);
     console.log("[Learning] Summary sent to Test group");
+  } else {
+    console.log("[Learning] Client not ready — summary:\n", summary);
   }
 }

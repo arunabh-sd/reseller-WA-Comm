@@ -37,8 +37,9 @@ export async function fetchProductSignals() {
   return runCard(14565);
 }
 
-// Card 14915 — day-range performance (orders, PPO, shares)
+// Card 14915 — day-range performance (orders, PPO, shares) for ALL products
 // Requires start_date and end_date (YYYY-MM-DD)
+// Logs column names on every call so we can debug field mismatches in Railway logs
 export async function fetchPerformanceForDate(dateStr) {
   const { data } = await mb.post(`/api/card/14915/query/json`, {
     parameters: [
@@ -46,5 +47,41 @@ export async function fetchPerformanceForDate(dateStr) {
       { type: "date/single", target: ["variable", ["template-tag", "end_date"]],   value: dateStr },
     ],
   });
-  return Array.isArray(data) ? data : [];
+  const rows = Array.isArray(data) ? data : [];
+  if (rows.length) {
+    console.log(`[14915] ${rows.length} rows | columns: ${Object.keys(rows[0]).join(", ")}`);
+    console.log(`[14915] sample:`, JSON.stringify(rows[0]));
+  } else {
+    console.warn(`[14915] No rows returned for ${dateStr}`);
+  }
+  return rows;
+}
+
+// Card 13897 — today's order totals (total_orders, new/repeat orderers)
+// Returns one aggregated row; column names detected flexibly
+export async function fetchTodayOrders() {
+  try {
+    const { data } = await mb.post(`/api/card/13897/query/json`, {});
+    const rows = Array.isArray(data) ? data : [];
+    if (!rows.length) return null;
+    // Log columns once per process run (will repeat across restarts — intentional)
+    if (!fetchTodayOrders._logged) {
+      console.log(`[13897] columns: ${Object.keys(rows[0]).join(", ")}`);
+      fetchTodayOrders._logged = true;
+    }
+    const row = rows[0];
+    // Try known field name variants
+    const pick = (row, ...keys) => {
+      for (const k of keys) if (row[k] != null) return Number(row[k]) || 0;
+      return 0;
+    };
+    return {
+      total_orders:    pick(row, "total_orders",    "Total Orders",    "orders"),
+      new_orderers:    pick(row, "new_orderers",    "New Orderers",    "new_customers",    "new"),
+      repeat_orderers: pick(row, "repeat_orderers", "Repeat Orderers", "repeat_customers", "repeat"),
+    };
+  } catch (err) {
+    console.error("[Orders] Card 13897 failed:", err.message);
+    return null;
+  }
 }
