@@ -141,7 +141,13 @@ WEIGHT_JSON:
 {"l30d_orders": 0.xx, "margin": 0.xx, "l7d_views": 0.xx, "l7d_shares": 0.xx, "exclusive": 0.xx, "marketplace_gap": 0.xx}
 (all weights must sum to 1.0; only change if data is clear; keep existing if unsure)`;
 
-  const anthropic = new Anthropic({ apiKey });
+  // Supports both direct Anthropic keys (sk-ant-...) and LiteLLM proxy keys.
+  // Set ANTHROPIC_BASE_URL to your LiteLLM proxy URL when using a proxy key.
+  const anthropic = new Anthropic({
+    apiKey,
+    ...(process.env.ANTHROPIC_BASE_URL && { baseURL: process.env.ANTHROPIC_BASE_URL }),
+    defaultHeaders: { "x-litellm-api-key": apiKey },
+  });
   const msg = await anthropic.messages.create({
     model:      "claude-haiku-4-5-20251001",
     max_tokens: 700,
