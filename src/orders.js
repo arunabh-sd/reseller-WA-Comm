@@ -46,6 +46,10 @@ export async function checkOrders() {
     return;
   }
 
+  // Save state BEFORE sending — if a send throws, next poll won't re-fire the same notifications
+  saveState({ date: today, ...current });
+  console.log(`[Orders] +${delta} new orders | total today: ${current.total_orders}`);
+
   // Cap individual notifications at 3; summarise if more came in at once
   if (delta > 3) {
     await client.sendTextMessage(
@@ -69,7 +73,4 @@ export async function checkOrders() {
       if (i < delta - 1) await sleep(2000);
     }
   }
-
-  saveState({ date: today, ...current });
-  console.log(`[Orders] +${delta} new orders | total today: ${current.total_orders}`);
 }
