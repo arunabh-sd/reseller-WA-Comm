@@ -78,9 +78,10 @@ export async function getRankedForSlot({ category, aovBucket }) {
   return scored;
 }
 
-// Pick N products for a slot, grouped by same sub-category
-// Sub-category selection is influenced by historical performance (subcategory_perf.json)
-export async function pickSlotProducts(slot) {
+// Pick products for a slot, grouped by same sub-category.
+// poolSize controls how many candidates to return from the best group —
+// caller uses a larger pool so it can replace products whose images fail.
+export async function pickSlotProducts(slot, poolSize = PRODUCTS_PER_SHARE) {
   const n      = PRODUCTS_PER_SHARE;
   const ranked = await getRankedForSlot(slot);
   if (!ranked.length) return [];
@@ -110,5 +111,5 @@ export async function pickSlotProducts(slot) {
 
   const best = groups.get(bestKey) || [];
   if (!best.length) return [];
-  return best.slice(0, n);
+  return best.slice(0, poolSize);
 }

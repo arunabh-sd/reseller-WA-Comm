@@ -2,6 +2,7 @@ import client from "./client/whatsapp.js";
 import { pickSlotProducts } from "./ranking.js";
 import { recordShared } from "./history.js";
 import { SUBCATEGORY_LABELS } from "./config/categories.js";
+import { PRODUCTS_PER_SHARE } from "./config/schedule.js";
 
 // Hardcoded target JIDs (from /debug/groups)
 const COMMUNITY_JIDS = [
@@ -142,26 +143,44 @@ async function fetchImage(url, attempt = 1) {
 
 // ── Main send ─────────────────────────────────────────────────────────────────
 export async function sendSlot(slot, communitiesOnly = false) {
-  const products = await pickSlotProducts(slot);
+  const slotTag = `${slot.hour}:${String(slot.minute || 0).padStart(2, "0")}`;
 
-  if (!products.length) {
-    console.log(`[Slot ${slot.hour}:${String(slot.minute||0).padStart(2,"0")}] No eligible ${slot.category} products — skipping`);
+  // Fetch a 5× pool so we can replace products whose images fail
+  const candidates = await pickSlotProducts(slot, PRODUCTS_PER_SHARE * 5);
+
+  if (!candidates.length) {
+    console.log(`[Slot ${slotTag}] No eligible ${slot.category} products — skipping`);
     return;
   }
 
   const targetJids = await getTargetJids(communitiesOnly);
 
-  // Pre-fetch ALL images with timeout+retry BEFORE sending anything to WA.
-  // If an image fails here, we skip it — we never re-send to groups.
-  products.forEach((p, i) => {
-    if (!p.img_link) console.warn(`[Slot] Product ${i} (${p.customer_product_short_id}) has no img_link`);
-  });
-  const buffers = await Promise.all(
-    products.map((p) => p.img_link ? fetchImage(p.img_link) : Promise.resolve(null))
+  // Fetch images for all candidates in parallel — BEFORE any WA sends
+  const fetched = await Promise.all(
+    candidates.map(async (p) => ({
+      product: p,
+      buffer:  p.img_link ? await fetchImage(p.img_link) : null,
+    }))
   );
 
-  const validImages = buffers.filter(Boolean).length;
-  console.log(`[Slot] Images: ${validImages}/${products.length} loaded`);
+  // Prefer products that have a valid image; fill remainder from those without
+  const withImage    = fetched.filter(x => x.buffer);
+  const withoutImage = fetched.filter(x => !x.buffer);
+
+  const selected = [
+    ...withImage.slice(0, PRODUCTS_PER_SHARE),
+    ...withoutImage.slice(0, Math.max(0, PRODUCTS_PER_SHARE - withImage.length)),
+  ].slice(0, PRODUCTS_PER_SHARE);
+
+  if (!selected.length) {
+    console.log(`[Slot ${slotTag}] No products after selection — skipping`);
+    return;
+  }
+
+  const products = selected.map(x => x.product);
+  const buffers  = selected.map(x => x.buffer);
+
+  console.log(`[Slot ${slotTag}] candidates: ${candidates.length} | with image: ${withImage.length} | selected: ${products.length}`);
 
   const text = buildCombinedText(products, slot);
 
@@ -192,5 +211,5 @@ export async function sendSlot(slot, communitiesOnly = false) {
   recordShared(products, slot);
 
   const label = products[0]?.category_l2 || SUBCATEGORY_LABELS[products[0]?.clean_product_type] || "?";
-  console.log(`✓ [${slot.hour}:${String(slot.minute||0).padStart(2,"0")}] ${slot.category} | ${products.length} products | ${label}`);
+  console.log(`✓ [${slotTag}] ${slot.category} | ${products.length} products | ${label}`);
 }
