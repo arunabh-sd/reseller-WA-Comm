@@ -88,8 +88,8 @@ async function callClaude(dateStr, sharedEntries, organicRows, currentWeights) {
   const missed      = sharedEntries.filter((p) => p.total_orders < 1 && p.total_shares <= 3 && p.total_ppo <= 10);
 
   const organicHit  = organicRows.filter((r) =>
-    (r[fields.orders] || 0) >= 1 || (r[fields.shares] || 0) > 3 || (r[fields.ppo] || 0) > 10
-  ).sort((a, b) => (b[fields.orders] || 0) - (a[fields.orders] || 0));
+    (r[F14915.orders] || 0) >= 1 || (r[F14915.shares] || 0) > 3 || (r[F14915.ppo] || 0) > 10
+  ).sort((a, b) => (b[F14915.orders] || 0) - (a[F14915.orders] || 0));
 
   const prompt = `You are the analytics brain for ShopDeck's WhatsApp reseller broadcaster.
 Yesterday (${dateStr}) we shared ${sharedEntries.length} products to ~3 reseller WA groups.

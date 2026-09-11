@@ -153,6 +153,9 @@ export async function sendSlot(slot, communitiesOnly = false) {
 
   // Pre-fetch ALL images with timeout+retry BEFORE sending anything to WA.
   // If an image fails here, we skip it — we never re-send to groups.
+  products.forEach((p, i) => {
+    if (!p.img_link) console.warn(`[Slot] Product ${i} (${p.customer_product_short_id}) has no img_link`);
+  });
   const buffers = await Promise.all(
     products.map((p) => p.img_link ? fetchImage(p.img_link) : Promise.resolve(null))
   );
@@ -167,7 +170,11 @@ export async function sendSlot(slot, communitiesOnly = false) {
     // 1. Quick image burst → WA auto-albums them
     for (let i = 0; i < products.length; i++) {
       if (buffers[i]) {
-        await client.sock.sendMessage(jid, { image: buffers[i], mimetype: "image/jpeg" });
+        try {
+          await client.sock.sendMessage(jid, { image: buffers[i], mimetype: "image/jpeg" });
+        } catch (imgErr) {
+          console.warn(`[Slot] Image ${i} send failed for ${jid}: ${imgErr.message}`);
+        }
       }
       await new Promise((r) => setTimeout(r, 300 + Math.random() * 200));
     }

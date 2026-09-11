@@ -109,7 +109,6 @@ export async function pickSlotProducts(slot) {
   }
 
   const best = groups.get(bestKey) || [];
-  // Never mix sub-categories — require at least 2 from the same group
-  if (best.length < 2) return [];
+  if (!best.length) return [];
   return best.slice(0, n);
 }
