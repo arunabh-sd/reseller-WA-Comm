@@ -5,12 +5,24 @@ import { CATEGORY_TYPES } from "./config/categories.js";
 import { loadWeights } from "./learning.js";
 
 // ── Contacts ──────────────────────────────────────────────────────────────────
+// Set NUDGE_CONTACTS env var on Railway as JSON, e.g.:
+// [{"name":"Karan","honorific":"Sir","phone":"9167856948"},...]
 
-const CONTACTS = [
-  { name: "Karan",   honorific: "Sir", phone: "9167856948" },
-  { name: "Arunabh", honorific: "Sir", phone: "9869446277" },
-  { name: "Piyush",  honorific: "Sir", phone: "9553336937" },
-];
+function loadContacts() {
+  const raw = process.env.NUDGE_CONTACTS;
+  if (!raw) {
+    console.warn("[Nudge] NUDGE_CONTACTS not set — nudge campaign disabled");
+    return [];
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("[Nudge] NUDGE_CONTACTS is not valid JSON:", e.message);
+    return [];
+  }
+}
+
+const CONTACTS = loadContacts();
 
 function toJid(phone) {
   return `91${phone}@s.whatsapp.net`;
