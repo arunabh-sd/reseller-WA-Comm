@@ -18,6 +18,7 @@ async function main() {
 
   // Message router
   client.on("message", async ({ jid, text }) => {
+    console.log(`[MSG] from=${jid} nudgeActive=${isNudgeJid(jid)} text="${text.slice(0, 40)}"`);
     // Nudge conversation replies (individual contacts)
     if (isNudgeJid(jid)) {
       handleNudgeReply(jid, text).catch(e => console.error("[Nudge] Reply handler error:", e.message));
