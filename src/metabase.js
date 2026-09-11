@@ -37,9 +37,8 @@ export async function fetchProductSignals() {
   return runCard(14565);
 }
 
-// Card 14915 — day-range performance (orders, PPO, shares) for ALL products
-// Requires start_date and end_date (YYYY-MM-DD)
-// Logs column names on every call so we can debug field mismatches in Railway logs
+// Card 14915 — per-product performance for a date range
+// Columns: customer_product_short_id, total_orders, total_ppo, total_shares
 export async function fetchPerformanceForDate(dateStr) {
   const { data } = await mb.post(`/api/card/14915/query/json`, {
     parameters: [
@@ -48,17 +47,12 @@ export async function fetchPerformanceForDate(dateStr) {
     ],
   });
   const rows = Array.isArray(data) ? data : [];
-  if (rows.length) {
-    console.log(`[14915] ${rows.length} rows | columns: ${Object.keys(rows[0]).join(", ")}`);
-    console.log(`[14915] sample:`, JSON.stringify(rows[0]));
-  } else {
-    console.warn(`[14915] No rows returned for ${dateStr}`);
-  }
+  console.log(`[14915] ${rows.length} rows for ${dateStr}`);
   return rows;
 }
 
-// Card 13897 — today's order totals (total_orders, new/repeat orderers)
-// Uses start_date + end_date manual filters; both set to today IST
+// Card 13897 — daily reseller events (one row per day)
+// Columns: total_orders_placed, unique_first_time_orderers, unique_repeat_orderers
 export async function fetchTodayOrders() {
   const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }); // YYYY-MM-DD
   try {
@@ -70,21 +64,11 @@ export async function fetchTodayOrders() {
     });
     const rows = Array.isArray(data) ? data : [];
     if (!rows.length) return null;
-    // Log columns once per process run (will repeat across restarts — intentional)
-    if (!fetchTodayOrders._logged) {
-      console.log(`[13897] columns: ${Object.keys(rows[0]).join(", ")}`);
-      fetchTodayOrders._logged = true;
-    }
     const row = rows[0];
-    // Try known field name variants
-    const pick = (row, ...keys) => {
-      for (const k of keys) if (row[k] != null) return Number(row[k]) || 0;
-      return 0;
-    };
     return {
-      total_orders:    pick(row, "total_orders",    "Total Orders",    "orders"),
-      new_orderers:    pick(row, "new_orderers",    "New Orderers",    "new_customers",    "new"),
-      repeat_orderers: pick(row, "repeat_orderers", "Repeat Orderers", "repeat_customers", "repeat"),
+      total_orders:    Number(row.total_orders_placed)         || 0,
+      new_orderers:    Number(row.unique_first_time_orderers)  || 0,
+      repeat_orderers: Number(row.unique_repeat_orderers)      || 0,
     };
   } catch (err) {
     console.error("[Orders] Card 13897 failed:", err.message);

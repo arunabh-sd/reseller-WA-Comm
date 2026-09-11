@@ -38,21 +38,9 @@ export function loadSubcategoryPerf() {
   return readJson(SUBCAT_PERF_FILE, {});
 }
 
-// ── Auto-detect 14915 field names ─────────────────────────────────────────────
-// Card 14915 was updated by the user — we don't hardcode column names
-
-function detectFields(row) {
-  const pick = (...candidates) =>
-    candidates.find((c) => row[c] != null) || candidates[0];
-
-  return {
-    id:     pick("customer_product_short_id", "product_id", "sku_id", "id"),
-    orders: pick("total_orders",    "orders",  "reseller_orders", "order_count"),
-    ppo:    pick("total_ppo",       "ppo",     "product_page_opens", "ppo_count", "views"),
-    shares: pick("total_shares",    "shares",  "product_shares",  "share_count"),
-    name:   pick("product_name",    "name",    "title",           "product_title"),
-  };
-}
+// Card 14915 columns (confirmed from Metabase screenshot):
+// customer_product_short_id, total_orders, total_ppo, total_shares
+const F14915 = { id: "customer_product_short_id", orders: "total_orders", ppo: "total_ppo", shares: "total_shares" };
 
 // ── Sub-category EMA update (runs automatically, no confirmation needed) ──────
 
@@ -83,12 +71,11 @@ function productLine(p) {
          `${p.total_orders}orders ${p.total_ppo}PPO ${p.total_shares}shares`;
 }
 
-function organicLine(p, fields) {
-  return `${p[fields.name] || p[fields.id]} | ${p[fields.id]} | ` +
-         `${p[fields.orders] || 0}orders ${p[fields.ppo] || 0}PPO ${p[fields.shares] || 0}shares`;
+function organicLine(r) {
+  return `${r[F14915.id]} | ${r[F14915.orders] || 0}orders ${r[F14915.ppo] || 0}PPO ${r[F14915.shares] || 0}shares`;
 }
 
-async function callClaude(dateStr, sharedEntries, organicRows, fields, currentWeights) {
+async function callClaude(dateStr, sharedEntries, organicRows, currentWeights) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     console.warn("[Learning] ANTHROPIC_API_KEY not set — skipping AI analysis");
@@ -120,7 +107,7 @@ SHARED → MISSED ALL BUCKETS (${missed.length}):
 ${missed.slice(0, 5).map(productLine).join("\n") || "none"}
 
 ORGANIC PERFORMERS — not shared by us, but hit a bucket (${organicHit.length}):
-${organicHit.slice(0, 5).map((r) => organicLine(r, fields)).join("\n") || "none"}
+${organicHit.slice(0, 5).map(organicLine).join("\n") || "none"}
 
 Current ranking weights: ${JSON.stringify(currentWeights, null, 2)}
 (l7d_views = PPO weight; exclusive and marketplace_gap start at 0 and are learned)
@@ -209,53 +196,41 @@ export async function runDailyLearning(client) {
     return;
   }
 
-  // 2. Fetch card 14915 for all products on that date
+  // 2. Fetch card 14915 — all products with performance for that date
   const perf14915 = await fetchPerformanceForDate(dateStr);
-  if (!perf14915.length) {
-    console.warn("[Learning] Card 14915 returned no data for", dateStr);
-  }
+  console.log(`[Learning] 14915 rows: ${perf14915.length}`);
 
-  // 3. Auto-detect field names from first row
-  const fields = perf14915.length ? detectFields(perf14915[0]) : {
-    id: "customer_product_short_id", orders: "total_orders", ppo: "total_ppo", shares: "total_shares", name: "product_name",
-  };
-  console.log(`[Learning] 14915 field mapping: id=${fields.id} orders=${fields.orders} ppo=${fields.ppo} shares=${fields.shares}`);
+  // 3. Build perfMap: customer_product_short_id → row
+  const perfMap = new Map(perf14915.map((r) => [String(r[F14915.id]), r]));
 
-  // 4. Build perfMap keyed by the detected ID field
-  const perfMap = new Map(perf14915.map((r) => [String(r[fields.id]), r]));
-
-  // 5. Cross-reference shared products with 14915 performance
+  // 4. Cross-reference shared products with 14915 (same ID field: customer_product_short_id)
   const sharedSet = new Set(sent.map((e) => String(e.product_id)));
   const sharedEntries = sent.map((e) => {
     const r = perfMap.get(String(e.product_id)) || {};
     return {
       ...e,
-      total_orders: Number(r[fields.orders] ?? 0),
-      total_ppo:    Number(r[fields.ppo]    ?? 0),
-      total_shares: Number(r[fields.shares] ?? 0),
+      total_orders: Number(r[F14915.orders] ?? 0),
+      total_ppo:    Number(r[F14915.ppo]    ?? 0),
+      total_shares: Number(r[F14915.shares] ?? 0),
     };
   });
 
   const matched = sharedEntries.filter((e) => e.total_orders > 0 || e.total_ppo > 0 || e.total_shares > 0).length;
-  console.log(`[Learning] Shared: ${sharedEntries.length} | matched to 14915: ${matched}`);
-  if (matched === 0 && perf14915.length > 0) {
-    console.warn("[Learning] 0 shared products matched 14915 — check field names above and verify product IDs align");
-  }
+  console.log(`[Learning] Shared: ${sharedEntries.length} | matched in 14915: ${matched}`);
 
-  // 6. Organic performers: in 14915 but NOT shared by us, and hit at least one bucket
+  // 5. Organic performers: in 14915 but not shared by us, hit at least one bucket
   const organicRows = perf14915.filter((r) => {
-    const id = String(r[fields.id]);
-    if (sharedSet.has(id)) return false;
-    return (r[fields.orders] || 0) >= 1 || (r[fields.shares] || 0) > 3 || (r[fields.ppo] || 0) > 10;
+    if (sharedSet.has(String(r[F14915.id]))) return false;
+    return (r[F14915.orders] || 0) >= 1 || (r[F14915.shares] || 0) > 3 || (r[F14915.ppo] || 0) > 10;
   });
   console.log(`[Learning] Organic performers: ${organicRows.length}`);
 
-  // 7. Update sub-category EMA (internal, auto — no confirmation needed)
+  // 6. Update sub-category EMA (internal, no confirmation needed)
   updateSubcategoryPerf(sharedEntries);
 
-  // 8. Call Claude for AI analysis
+  // 7. Call Claude for AI analysis
   const currentWeights = loadWeights();
-  const aiText         = await callClaude(dateStr, sharedEntries, organicRows, fields, currentWeights);
+  const aiText         = await callClaude(dateStr, sharedEntries, organicRows, currentWeights);
   const { insights, recommendation, weights: recommendedWeights } = parseAIResponse(aiText);
 
   // 9. Build summary message
