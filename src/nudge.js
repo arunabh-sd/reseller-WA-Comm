@@ -22,19 +22,50 @@ export const CONTACT_BY_JID = new Map(CONTACTS.map(c => [toJid(c.phone), c]));
 
 // Call after WhatsApp connects — resolves real JIDs (may be @lid in newer WhatsApp)
 export async function resolveContactJids(sock) {
+  await new Promise(r => setTimeout(r, 3000)); // let contacts store populate
+
   for (const contact of CONTACTS) {
+    const phoneJid = toJid(contact.phone);
+
+    // Log whatever Baileys has for this phone JID so we can see the structure
+    const info = sock.contacts?.[phoneJid];
+    console.log(`[Nudge] contacts[${phoneJid}] =`, JSON.stringify(info));
+
+    // Check if contacts store has an @lid mapped from this phone JID
+    if (info) {
+      const lid = info.lid || info.linkedJid || info.phoneJid;
+      if (lid && lid !== phoneJid) {
+        NUDGE_JIDS.add(lid);
+        CONTACT_BY_JID.set(lid, contact);
+        console.log(`[Nudge] Learned LID for ${contact.name}: ${lid}`);
+      }
+    }
+
+    // Scan ALL contacts entries in case indexed by @lid with a reference back
+    for (const [key, val] of Object.entries(sock.contacts || {})) {
+      if (!key.endsWith('@lid')) continue;
+      const linked = val.phoneJid || val.linkedJid || val.id;
+      if (linked === phoneJid) {
+        NUDGE_JIDS.add(key);
+        CONTACT_BY_JID.set(key, contact);
+        console.log(`[Nudge] Found LID for ${contact.name}: ${key}`);
+      }
+    }
+
+    // Also try onWhatsApp as a fallback
     try {
       const results = await sock.onWhatsApp(`+91${contact.phone}`);
-      if (results?.[0]?.jid) {
-        const jid = results[0].jid;
-        NUDGE_JIDS.add(jid);
-        CONTACT_BY_JID.set(jid, contact);
-        console.log(`[Nudge] Resolved ${contact.name}: ${jid}`);
+      if (results?.[0]?.jid && !NUDGE_JIDS.has(results[0].jid)) {
+        NUDGE_JIDS.add(results[0].jid);
+        CONTACT_BY_JID.set(results[0].jid, contact);
+        console.log(`[Nudge] onWhatsApp resolved ${contact.name}: ${results[0].jid}`);
       }
     } catch (e) {
-      console.warn(`[Nudge] Could not resolve ${contact.phone}:`, e.message);
+      console.warn(`[Nudge] onWhatsApp failed for ${contact.phone}:`, e.message);
     }
   }
+
+  console.log(`[Nudge] NUDGE_JIDS after resolve:`, [...NUDGE_JIDS]);
 }
 
 // ── In-memory conversation state (fresh each day) ─────────────────────────────
