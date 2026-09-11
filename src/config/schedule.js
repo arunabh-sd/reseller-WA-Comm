@@ -34,4 +34,4 @@ export const AOV_BUCKETS = {
 };
 
 export const PRODUCTS_PER_SHARE = 4;
-export const MIN_L30D_ORDERS    = 5;
+export const MIN_L30D_ORDERS    = 0;

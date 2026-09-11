@@ -109,6 +109,7 @@ function buildCombinedText(products, slot) {
 // ── Image fetch with timeout + content-type guard + single retry ──────────────
 // All retries happen here, BEFORE any WA send — never re-send to communities
 async function fetchImage(url, attempt = 1) {
+  if (!url) return null;
   const controller = new AbortController();
   const timer      = setTimeout(() => controller.abort(), 8000);
   try {
@@ -118,25 +119,19 @@ async function fetchImage(url, attempt = 1) {
       console.warn(`[img] HTTP ${res.status} for ${url.slice(0, 80)}`);
       return null;
     }
-    const ct = res.headers.get("content-type") || "";
-    if (!ct.startsWith("image/")) {
-      console.warn(`[img] Non-image content-type "${ct}" — skipping ${url.slice(0, 80)}`);
-      return null;
-    }
     const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length < 1024) {
-      console.warn(`[img] Suspiciously small buffer (${buf.length}B) — skipping ${url.slice(0, 80)}`);
+    if (buf.length < 512) {
+      console.warn(`[img] Empty response (${buf.length}B) for ${url.slice(0, 80)}`);
       return null;
     }
     return buf;
   } catch (err) {
     clearTimeout(timer);
     if (attempt === 1) {
-      console.warn(`[img] Fetch failed (attempt 1), retrying: ${err.message}`);
       await new Promise((r) => setTimeout(r, 1500));
       return fetchImage(url, 2);
     }
-    console.warn(`[img] Failed after retry — dropping image: ${url.slice(0, 80)}`);
+    console.warn(`[img] Failed: ${err.message} — ${url.slice(0, 80)}`);
     return null;
   }
 }

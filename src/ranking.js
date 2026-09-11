@@ -118,5 +118,18 @@ export async function pickSlotProducts(slot, poolSize = PRODUCTS_PER_SHARE) {
 
   const best = groups.get(bestKey) || [];
   if (!best.length) return [];
-  return best.slice(0, poolSize);
+
+  // If best group doesn't have enough, fill from other groups (ranked by score)
+  if (best.length >= poolSize) return best.slice(0, poolSize);
+
+  const result = [...best];
+  for (const [sc, group] of groups) {
+    if (sc === bestKey) continue;
+    for (const p of group) {
+      if (result.length >= poolSize) break;
+      result.push(p);
+    }
+    if (result.length >= poolSize) break;
+  }
+  return result;
 }
