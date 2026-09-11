@@ -4,7 +4,7 @@ import { startQRServer } from "./server.js";
 import { startScheduler } from "./scheduler.js";
 import { warmCache } from "./cache.js";
 import { loadPending, applyPending, TEST_GROUP_JID } from "./pending_changes.js";
-import { isNudgeJid, handleNudgeReply } from "./nudge.js";
+import { isNudgeJid, handleNudgeReply, resolveContactJids } from "./nudge.js";
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err?.message || err);
@@ -40,6 +40,7 @@ async function main() {
   client.once("ready", () => {
     startScheduler();
     warmCache().catch((e) => console.error("[cache] Warm failed:", e?.message));
+    resolveContactJids(client.sock).catch((e) => console.error("[Nudge] JID resolve failed:", e.message));
   });
 
   client.once("logged_out", () => {

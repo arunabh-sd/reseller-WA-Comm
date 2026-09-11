@@ -16,9 +16,26 @@ function toJid(phone) {
   return `91${phone}@s.whatsapp.net`;
 }
 
-export const NUDGE_JIDS = new Set(CONTACTS.map(c => toJid(c.phone)));
+// Start with @s.whatsapp.net defaults; resolveContactJids() updates with actual @lid JIDs
+export const NUDGE_JIDS     = new Set(CONTACTS.map(c => toJid(c.phone)));
+export const CONTACT_BY_JID = new Map(CONTACTS.map(c => [toJid(c.phone), c]));
 
-const CONTACT_BY_JID = new Map(CONTACTS.map(c => [toJid(c.phone), c]));
+// Call after WhatsApp connects — resolves real JIDs (may be @lid in newer WhatsApp)
+export async function resolveContactJids(sock) {
+  for (const contact of CONTACTS) {
+    try {
+      const results = await sock.onWhatsApp(`+91${contact.phone}`);
+      if (results?.[0]?.jid) {
+        const jid = results[0].jid;
+        NUDGE_JIDS.add(jid);
+        CONTACT_BY_JID.set(jid, contact);
+        console.log(`[Nudge] Resolved ${contact.name}: ${jid}`);
+      }
+    } catch (e) {
+      console.warn(`[Nudge] Could not resolve ${contact.phone}:`, e.message);
+    }
+  }
+}
 
 // ── In-memory conversation state (fresh each day) ─────────────────────────────
 
