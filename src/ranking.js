@@ -118,18 +118,15 @@ export async function pickSlotProducts(slot, poolSize = PRODUCTS_PER_SHARE) {
 
   const best = groups.get(bestKey) || [];
   if (!best.length) return [];
-
-  // If best group doesn't have enough, fill from other groups (ranked by score)
   if (best.length >= poolSize) return best.slice(0, poolSize);
 
-  const result = [...best];
-  for (const [sc, group] of groups) {
-    if (sc === bestKey) continue;
-    for (const p of group) {
-      if (result.length >= poolSize) break;
-      result.push(p);
-    }
-    if (result.length >= poolSize) break;
+  // Best group is thin — retry without AOV restriction, same subcategory only
+  if (slot.aovBucket !== "any") {
+    console.log(`[Ranking] ${slot.category}-${slot.aovBucket}: only ${best.length} in best group — relaxing AOV`);
+    const relaxed = await getRankedForSlot({ ...slot, aovBucket: "any" });
+    const relaxedGroup = relaxed.filter(p => p.clean_product_type === bestKey);
+    if (relaxedGroup.length > best.length) return relaxedGroup.slice(0, poolSize);
   }
-  return result;
+
+  return best.slice(0, poolSize);
 }
