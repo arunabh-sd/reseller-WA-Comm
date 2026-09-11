@@ -290,6 +290,10 @@ export async function startNudgeCampaign() {
 
     try {
       if (!client.isReady) throw new Error("WhatsApp not ready");
+      // Subscribe to presence first — triggers key bundle sync for fresh Signal session.
+      // Reduces "Waiting for this message" on receiver's side after a redeploy.
+      try { await client.sock.presenceSubscribe(jid); } catch {}
+      await sleep(500);
       const sent = await client.sock.sendMessage(jid, { text: opening });
       if (sent?.key?.id) client.registerSentMsg(sent.key.id, { conversation: opening });
       // Capture actual JID from sent receipt — may be @lid for newer WhatsApp users

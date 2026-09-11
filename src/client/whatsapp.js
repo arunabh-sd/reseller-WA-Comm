@@ -7,9 +7,15 @@ import makeWASocket, {
 import { Boom } from "@hapi/boom";
 import pino from "pino";
 import { EventEmitter } from "events";
+import fs from "fs";
 
 const AUTH_DIR = process.env.AUTH_DIR || "auth";
 const logger = pino({ level: "silent" }); // Baileys internal logs off
+
+// Persist sent messages across Railway redeploys so retransmission works without "." fallback
+const MSGSTORE_PATH = process.env.DATA_DIR
+  ? `${process.env.DATA_DIR}/msgstore.json`
+  : "/app/data/msgstore.json";
 
 class WhatsAppClient extends EventEmitter {
   constructor() {
@@ -18,15 +24,40 @@ class WhatsAppClient extends EventEmitter {
     this.isReady = false;
     this.latestQR = null;
     this._msgStore = new Map(); // id → message content, for retransmission
+    this._persistTimer = null;
+    this._loadMsgStore();
+  }
+
+  _loadMsgStore() {
+    try {
+      const data = JSON.parse(fs.readFileSync(MSGSTORE_PATH, "utf8"));
+      for (const [k, v] of Object.entries(data)) this._msgStore.set(k, v);
+      console.log(`[WhatsApp] Restored ${this._msgStore.size} messages for retransmission`);
+    } catch {
+      // File doesn't exist yet — start fresh, no problem
+    }
+  }
+
+  _saveMsgStore() {
+    if (this._persistTimer) return;
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      try {
+        fs.writeFileSync(MSGSTORE_PATH, JSON.stringify(Object.fromEntries(this._msgStore)));
+      } catch (e) {
+        console.warn("[WhatsApp] Failed to persist msgstore:", e.message);
+      }
+    }, 1000);
   }
 
   // Store a sent message so it can be retransmitted if receiver can't decrypt it.
-  // Without this, Baileys responds to retransmission requests with undefined → wrong message shown.
+  // Persisted to disk so retransmission survives Railway redeploys.
   registerSentMsg(id, content) {
     this._msgStore.set(id, content);
     if (this._msgStore.size > 500) {
       this._msgStore.delete(this._msgStore.keys().next().value);
     }
+    this._saveMsgStore();
   }
 
   async connect() {
@@ -42,10 +73,10 @@ class WhatsAppClient extends EventEmitter {
       logger,
       printQRInTerminal: false,
       browser: ["ShopDeck Broadcaster", "Chrome", "1.0.0"],
-      // Return original message content on retransmission requests so receiver
-      // can decrypt. Without this (or with a wrong value like "."), receivers
-      // see "Waiting for this message" or get a spurious "." message.
-      getMessage: async (key) => this._msgStore.get(key.id),
+      // Return stored message for retransmission — lets receiver decrypt properly.
+      // Fallback to "." so WhatsApp can always clear "waiting" state even for
+      // messages sent before this process started (e.g. after a Railway redeploy).
+      getMessage: async (key) => this._msgStore.get(key.id) ?? { conversation: "." },
     });
 
     this.sock.ev.on("creds.update", saveCreds);
