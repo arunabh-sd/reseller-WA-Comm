@@ -63,21 +63,33 @@ export function startQRServer() {
     res.json(summary);
   });
 
-  // Manual test — triggers one slot send immediately
-  // Usage: /test  /test?category=kurti  /test?hour=15
-  app.get("/test", async (req, res) => {
+  // Manual trigger — fire any slot immediately
+  // Usage: /trigger?category=jewellery&aov=high
+  //        /trigger?hour=19
+  //        /trigger?category=kurti  (picks first matching)
+  // Add &targets=communities to send to communities only (not focus group)
+  app.get("/trigger", async (req, res) => {
     if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
+
+    const { category, aov, hour, targets } = req.query;
     let slot;
-    if (req.query.hour) {
-      slot = DAILY_SLOTS.find((s) => s.hour === parseInt(req.query.hour)) || DAILY_SLOTS[0];
-    } else if (req.query.category) {
-      slot = DAILY_SLOTS.find((s) => s.category === req.query.category) || DAILY_SLOTS[0];
+
+    if (category && aov) {
+      slot = DAILY_SLOTS.find((s) => s.category === category && s.aovBucket === aov);
+    } else if (hour) {
+      slot = DAILY_SLOTS.find((s) => s.hour === parseInt(hour));
+    } else if (category) {
+      slot = DAILY_SLOTS.find((s) => s.category === category);
     } else {
-      slot = DAILY_SLOTS[0];
+      return res.status(400).json({ error: "Pass ?category=kurti&aov=high or ?hour=19", slots: DAILY_SLOTS });
     }
-    const onlyCommunities = req.query.targets === "communities";
-    res.json({ message: `Triggering slot: ${slot.hour}:${String(slot.minute).padStart(2,"0")} ${slot.category} (${slot.aovBucket})${onlyCommunities ? " — communities only" : ""}` });
-    sendSlot(slot, onlyCommunities).catch((e) => console.error("[/test]", e));
+
+    if (!slot) return res.status(404).json({ error: "No matching slot found", slots: DAILY_SLOTS });
+
+    const onlyCommunities = targets === "communities";
+    const tag = `${slot.hour}:${String(slot.minute).padStart(2,"0")} ${slot.category} (${slot.aovBucket})`;
+    res.json({ message: `Firing: ${tag}${onlyCommunities ? " — communities only" : ""}` });
+    sendSlot(slot, onlyCommunities).catch((e) => console.error("[/trigger]", e));
   });
 
   // Root redirects to /qr
