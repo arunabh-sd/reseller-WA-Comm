@@ -216,21 +216,21 @@ export async function startNudgeCampaign() {
   }
 }
 
-// Returns true if jid has an active nudge conversation
+// Returns true if jid is a known nudge contact (regardless of campaign state)
 export function isNudgeJid(jid) {
-  const conv = conversations.get(jid);
-  if (!conv?.active) return false;
-  // Auto-expire
-  if (Date.now() - conv.lastAt > CONV_TTL_MS) {
-    conv.active = false;
-    return false;
-  }
-  return true;
+  return NUDGE_JIDS.has(jid);
 }
 
 export async function handleNudgeReply(jid, text) {
-  const conv = conversations.get(jid);
-  if (!conv?.active) return;
+  let conv = conversations.get(jid);
+
+  // Lazily create conversation if contact replies but campaign state was lost (e.g. restart)
+  if (!conv || !conv.active) {
+    const contact = CONTACT_BY_JID.get(jid);
+    if (!contact) return;
+    conv = { contact, history: [], shownIds: new Set(), active: true, lastAt: Date.now() };
+    conversations.set(jid, conv);
+  }
 
   conv.lastAt = Date.now();
   conv.history.push({ role: "user", content: text });
