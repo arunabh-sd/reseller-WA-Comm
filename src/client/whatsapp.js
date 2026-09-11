@@ -25,7 +25,27 @@ class WhatsAppClient extends EventEmitter {
     this.latestQR = null;
     this._msgStore = new Map(); // id → message content, for retransmission
     this._persistTimer = null;
+    this._sessionsCleaned = false;
     this._loadMsgStore();
+  }
+
+  // Clear all Signal session/key files except creds.json on first startup.
+  // This forces fresh session establishment and eliminates "Bad MAC" / "Waiting for this message"
+  // caused by stale session state after a Railway redeploy.
+  // creds.json (identity + registration) is preserved — no QR rescan needed.
+  _cleanStaleSessions() {
+    try {
+      const files = fs.readdirSync(AUTH_DIR);
+      let cleared = 0;
+      for (const file of files) {
+        if (file === "creds.json") continue;
+        fs.unlinkSync(`${AUTH_DIR}/${file}`);
+        cleared++;
+      }
+      if (cleared > 0) console.log(`[WhatsApp] Cleared ${cleared} stale session files → fresh Signal sessions`);
+    } catch (e) {
+      if (e.code !== "ENOENT") console.warn("[WhatsApp] Session clean failed:", e.message);
+    }
   }
 
   _loadMsgStore() {
@@ -61,6 +81,12 @@ class WhatsAppClient extends EventEmitter {
   }
 
   async connect() {
+    // Only on first startup — not on auto-reconnects
+    if (!this._sessionsCleaned) {
+      this._sessionsCleaned = true;
+      this._cleanStaleSessions();
+    }
+
     const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     const { version } = await fetchLatestBaileysVersion();
 
