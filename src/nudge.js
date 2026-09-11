@@ -133,18 +133,21 @@ async function fetchNudgePool(category, shownIds) {
   })).sort((a, b) => b._score - a._score).slice(0, 20); // top 20 pool
 }
 
-async function fetchImage(url) {
+async function fetchImage(url, attempt = 1) {
   if (!url) return null;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 8000);
   try {
     const res = await fetch(url, { signal: controller.signal });
     clearTimeout(timer);
-    if (!res.ok || !res.headers.get("content-type")?.startsWith("image/")) return null;
+    if (!res.ok) { console.warn(`[nudge img] HTTP ${res.status}`); return null; }
     const buf = Buffer.from(await res.arrayBuffer());
-    return buf.length >= 1024 ? buf : null;
-  } catch {
+    if (buf.length < 512) { console.warn(`[nudge img] Empty (${buf.length}B)`); return null; }
+    return buf;
+  } catch (err) {
     clearTimeout(timer);
+    if (attempt === 1) { await sleep(1500); return fetchImage(url, 2); }
+    console.warn(`[nudge img] Failed: ${err.message}`);
     return null;
   }
 }
@@ -253,8 +256,17 @@ export async function startNudgeCampaign() {
     });
 
     try {
-      await client.sendTextMessage(jid, opening);
-      console.log(`[Nudge] Opened → ${contact.name} (${jid})`);
+      if (!client.isReady) throw new Error("WhatsApp not ready");
+      const sent = await client.sock.sendMessage(jid, { text: opening });
+      // Capture the actual JID WhatsApp used (may be @lid instead of @s.whatsapp.net)
+      const actualJid = sent?.key?.remoteJid;
+      if (actualJid && actualJid !== jid) {
+        NUDGE_JIDS.add(actualJid);
+        CONTACT_BY_JID.set(actualJid, contact);
+        conversations.set(actualJid, conversations.get(jid));
+        console.log(`[Nudge] Learned JID for ${contact.name}: ${actualJid}`);
+      }
+      console.log(`[Nudge] Opened → ${contact.name}`);
     } catch (err) {
       console.error(`[Nudge] Failed to open with ${contact.name}:`, err.message);
       conversations.delete(jid);
@@ -264,20 +276,62 @@ export async function startNudgeCampaign() {
   }
 }
 
-// Dynamically resolve an @lid JID to one of our contacts by querying WhatsApp
+// Dynamically resolve an @lid JID to one of our contacts
 async function resolveContactFromLid(lid) {
   if (CONTACT_BY_JID.has(lid)) return CONTACT_BY_JID.get(lid);
+
+  const allContacts = client.sock?.contacts || {};
+  const lidEntry = allContacts[lid];
+  console.log(`[Nudge] contacts[${lid}] =`, JSON.stringify(lidEntry));
+
+  // Strategy 1: @lid entry has a linked phone JID
+  if (lidEntry) {
+    const phoneRef = lidEntry.lid || lidEntry.phoneJid || lidEntry.linkedJid || lidEntry.jid || lidEntry.id;
+    if (phoneRef && phoneRef !== lid) {
+      for (const contact of CONTACTS) {
+        if (phoneRef.includes(contact.phone)) {
+          NUDGE_JIDS.add(lid);
+          CONTACT_BY_JID.set(lid, contact);
+          console.log(`[Nudge] Resolved ${contact.name} via lidEntry.phoneRef: ${phoneRef}`);
+          return contact;
+        }
+      }
+    }
+  }
+
+  // Strategy 2: scan @s.whatsapp.net entries for a back-reference to this @lid
+  for (const [key, val] of Object.entries(allContacts)) {
+    if (!key.endsWith('@s.whatsapp.net') && !key.endsWith('@lid')) continue;
+    const linkedLid = val?.lid || val?.linkedJid;
+    if (linkedLid === lid) {
+      for (const contact of CONTACTS) {
+        if (key.includes(contact.phone)) {
+          NUDGE_JIDS.add(lid);
+          CONTACT_BY_JID.set(lid, contact);
+          console.log(`[Nudge] Resolved ${contact.name} via back-ref from ${key}`);
+          return contact;
+        }
+      }
+    }
+  }
+
+  // Strategy 3: onWhatsApp lookup (returns @s.whatsapp.net, probably won't match @lid)
   for (const contact of CONTACTS) {
     try {
       const results = await client.sock.onWhatsApp(`+91${contact.phone}`);
       if (results?.[0]?.jid === lid) {
         NUDGE_JIDS.add(lid);
         CONTACT_BY_JID.set(lid, contact);
-        console.log(`[Nudge] Dynamically resolved ${contact.name}: ${lid}`);
+        console.log(`[Nudge] Resolved ${contact.name} via onWhatsApp: ${lid}`);
         return contact;
       }
     } catch {}
   }
+
+  // Strategy 4: dump a few contacts entries so we can see the actual data structure
+  const sample = Object.entries(allContacts).slice(0, 5).map(([k,v]) => `${k}=${JSON.stringify(v)}`);
+  console.log(`[Nudge] contacts sample:`, sample.join(' | '));
+
   return null;
 }
 
@@ -299,7 +353,17 @@ export async function handleNudgeReply(jid, text) {
       contact = await resolveContactFromLid(jid);
     }
 
-    if (!contact) return; // not one of our 3 contacts — ignore
+    // Safety fallback: if still unresolved but @lid, allow up to 3 active unknown convos
+    // (almost certainly one of our 3 contacts replying to the campaign)
+    if (!contact && jid?.endsWith('@lid')) {
+      const unknownLids = [...conversations.keys()].filter(k => k.endsWith('@lid') && !CONTACT_BY_JID.has(k));
+      if (unknownLids.length < 3) {
+        contact = { name: "Sir", honorific: "", phone: "unknown" };
+        console.log(`[Nudge] Using fallback contact for unresolved @lid: ${jid}`);
+      }
+    }
+
+    if (!contact) return; // not an @lid or too many unknown convos
     conv = { contact, history: [], shownIds: new Set(), active: true, lastAt: Date.now() };
     conversations.set(jid, conv);
   }
