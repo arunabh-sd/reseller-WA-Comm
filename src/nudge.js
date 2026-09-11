@@ -264,18 +264,42 @@ export async function startNudgeCampaign() {
   }
 }
 
-// Returns true if jid is a known nudge contact (regardless of campaign state)
+// Dynamically resolve an @lid JID to one of our contacts by querying WhatsApp
+async function resolveContactFromLid(lid) {
+  if (CONTACT_BY_JID.has(lid)) return CONTACT_BY_JID.get(lid);
+  for (const contact of CONTACTS) {
+    try {
+      const results = await client.sock.onWhatsApp(`+91${contact.phone}`);
+      if (results?.[0]?.jid === lid) {
+        NUDGE_JIDS.add(lid);
+        CONTACT_BY_JID.set(lid, contact);
+        console.log(`[Nudge] Dynamically resolved ${contact.name}: ${lid}`);
+        return contact;
+      }
+    } catch {}
+  }
+  return null;
+}
+
+// Route ALL @lid individual chats to nudge — group chats end in @g.us
 export function isNudgeJid(jid) {
-  return NUDGE_JIDS.has(jid);
+  if (NUDGE_JIDS.has(jid)) return true;
+  if (jid?.endsWith('@lid')) return true; // resolve happens inside handleNudgeReply
+  return false;
 }
 
 export async function handleNudgeReply(jid, text) {
   let conv = conversations.get(jid);
 
-  // Lazily create conversation if contact replies but campaign state was lost (e.g. restart)
   if (!conv || !conv.active) {
-    const contact = CONTACT_BY_JID.get(jid);
-    if (!contact) return;
+    let contact = CONTACT_BY_JID.get(jid);
+
+    // For unknown @lid JIDs, try to resolve to a known contact
+    if (!contact && jid?.endsWith('@lid')) {
+      contact = await resolveContactFromLid(jid);
+    }
+
+    if (!contact) return; // not one of our 3 contacts — ignore
     conv = { contact, history: [], shownIds: new Set(), active: true, lastAt: Date.now() };
     conversations.set(jid, conv);
   }
