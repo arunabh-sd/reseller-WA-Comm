@@ -1,7 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import client from "./client/whatsapp.js";
 import { getProductMap } from "./cache.js";
-import { CATEGORY_TYPES } from "./config/categories.js";
 import { loadWeights } from "./learning.js";
 
 // ── Contacts ──────────────────────────────────────────────────────────────────
@@ -20,45 +19,46 @@ function toJid(phone) {
 export const NUDGE_JIDS     = new Set(CONTACTS.map(c => toJid(c.phone)));
 export const CONTACT_BY_JID = new Map(CONTACTS.map(c => [toJid(c.phone), c]));
 
+// Learn a JID → contact mapping and add to the whitelist
+function learnJid(jid, contact) {
+  if (!jid || NUDGE_JIDS.has(jid)) return;
+  NUDGE_JIDS.add(jid);
+  CONTACT_BY_JID.set(jid, contact);
+  console.log(`[Nudge] Learned JID for ${contact.name}: ${jid}`);
+}
+
 // Call after WhatsApp connects — resolves real JIDs (may be @lid in newer WhatsApp)
 export async function resolveContactJids(sock) {
-  await new Promise(r => setTimeout(r, 3000)); // let contacts store populate
+  await new Promise(r => setTimeout(r, 8000)); // wait for contacts store to populate
 
   for (const contact of CONTACTS) {
     const phoneJid = toJid(contact.phone);
 
-    // Log whatever Baileys has for this phone JID so we can see the structure
+    // Contacts store: phone JID entry may carry a .lid field in Baileys 6.7+
     const info = sock.contacts?.[phoneJid];
     console.log(`[Nudge] contacts[${phoneJid}] =`, JSON.stringify(info));
-
-    // Check if contacts store has an @lid mapped from this phone JID
     if (info) {
       const lid = info.lid || info.linkedJid || info.phoneJid;
-      if (lid && lid !== phoneJid) {
-        NUDGE_JIDS.add(lid);
-        CONTACT_BY_JID.set(lid, contact);
-        console.log(`[Nudge] Learned LID for ${contact.name}: ${lid}`);
-      }
+      if (lid && lid !== phoneJid) learnJid(lid, contact);
     }
 
-    // Scan ALL contacts entries in case indexed by @lid with a reference back
+    // Scan all @lid keys for back-reference to this phone JID
     for (const [key, val] of Object.entries(sock.contacts || {})) {
       if (!key.endsWith('@lid')) continue;
-      const linked = val.phoneJid || val.linkedJid || val.id;
-      if (linked === phoneJid) {
-        NUDGE_JIDS.add(key);
-        CONTACT_BY_JID.set(key, contact);
-        console.log(`[Nudge] Found LID for ${contact.name}: ${key}`);
+      const linked = val?.phoneJid || val?.linkedJid || val?.id;
+      if (linked === phoneJid || (linked && linked.includes(contact.phone))) {
+        learnJid(key, contact);
       }
     }
 
-    // Also try onWhatsApp as a fallback
+    // onWhatsApp — newer Baileys may return .lid field in the result
     try {
       const results = await sock.onWhatsApp(`+91${contact.phone}`);
-      if (results?.[0]?.jid && !NUDGE_JIDS.has(results[0].jid)) {
-        NUDGE_JIDS.add(results[0].jid);
-        CONTACT_BY_JID.set(results[0].jid, contact);
-        console.log(`[Nudge] onWhatsApp resolved ${contact.name}: ${results[0].jid}`);
+      const res = results?.[0];
+      console.log(`[Nudge] onWhatsApp(${contact.phone}) =`, JSON.stringify(res));
+      if (res) {
+        if (res.jid) learnJid(res.jid, contact);
+        if (res.lid) learnJid(res.lid, contact);
       }
     } catch (e) {
       console.warn(`[Nudge] onWhatsApp failed for ${contact.phone}:`, e.message);
@@ -106,37 +106,40 @@ function sleep(ms) {
 
 // ── Product fetching ──────────────────────────────────────────────────────────
 
-// Parse a filter like "green 500-1500" → { keywords: ["green"], minPrice: 500, maxPrice: 1500 }
+// Parse "green 500-1500", "₹500 se ₹1500", "red 800 to 1200", etc.
 function parseFilter(filterQuery = "") {
-  const priceMatch = filterQuery.match(/(\d+)\s*[-–]\s*(\d+)/);
+  const cleaned = filterQuery.replace(/[₹,]/g, "").trim();
+  // Matches: 500-1500 | 500–1500 | 500 to 1500 | 500 se 1500
+  const priceMatch = cleaned.match(/(\d+)\s*(?:[-–—]|to|se)\s*(\d+)/i);
   const minPrice = priceMatch ? parseInt(priceMatch[1]) : 0;
   const maxPrice = priceMatch ? parseInt(priceMatch[2]) : Infinity;
-  const keywordStr = filterQuery.replace(/\d+\s*[-–]\s*\d+/g, "").trim().toLowerCase();
+  const keywordStr = cleaned.replace(/(\d+)\s*(?:[-–—]|to|se)\s*\d+/gi, "").trim().toLowerCase();
   const keywords = keywordStr.split(/\s+/).filter(w => w.length >= 3);
   return { keywords, minPrice, maxPrice, hasPrice: !!priceMatch };
 }
 
-function matchesKeywords(product, keywords) {
-  if (!keywords.length) return true;
-  const text = `${product.product_name} ${product.product_description || ""}`.toLowerCase();
-  return keywords.every(kw => new RegExp(`\\b${kw}\\b`).test(text));
-}
-
+// Search product_name + product_description for all terms.
+// Category word uses substring match (flexible); colour/style keywords use word boundary (strict).
 async function fetchNudgePool(category, shownIds, filterQuery = "") {
   const { keywords, minPrice, maxPrice, hasPrice } = parseFilter(filterQuery);
   const weights    = loadWeights();
   const productMap = await getProductMap();
-  const validTypes = new Set(CATEGORY_TYPES[category] || []);
-
-  if (!validTypes.size) return [];
+  const catKw      = category.toLowerCase(); // e.g. "kurti", "saree"
 
   const candidates = [...productMap.values()].filter(p => {
-    if (!validTypes.has(p.clean_product_type)) return false;
     if (shownIds.has(p.customer_product_short_id)) return false;
     const price = p.reseller_selling_price || 0;
     if (!price) return false;
     if (hasPrice && (price < minPrice || price > maxPrice)) return false;
-    if (!matchesKeywords(p, keywords)) return false;
+
+    const text = `${p.product_name} ${p.product_description || ""}`.toLowerCase();
+
+    // Category: substring match so "kurtis", "kurti set" etc. all pass
+    if (!text.includes(catKw)) return false;
+
+    // Extra keywords (color, style): word-boundary match so "green" ≠ "evergreen"
+    if (keywords.length && !keywords.every(kw => new RegExp(`\\b${kw}\\b`, "i").test(text))) return false;
+
     return true;
   });
 
@@ -289,13 +292,11 @@ export async function startNudgeCampaign() {
       if (!client.isReady) throw new Error("WhatsApp not ready");
       const sent = await client.sock.sendMessage(jid, { text: opening });
       if (sent?.key?.id) client.registerSentMsg(sent.key.id, { conversation: opening });
-      // Capture the actual JID WhatsApp used (may be @lid instead of @s.whatsapp.net)
+      // Capture actual JID from sent receipt — may be @lid for newer WhatsApp users
       const actualJid = sent?.key?.remoteJid;
       if (actualJid && actualJid !== jid) {
-        NUDGE_JIDS.add(actualJid);
-        CONTACT_BY_JID.set(actualJid, contact);
+        learnJid(actualJid, contact);
         conversations.set(actualJid, conversations.get(jid));
-        console.log(`[Nudge] Learned JID for ${contact.name}: ${actualJid}`);
       }
       console.log(`[Nudge] Opened → ${contact.name}`);
     } catch (err) {
@@ -307,70 +308,54 @@ export async function startNudgeCampaign() {
   }
 }
 
-// Dynamically resolve an @lid JID to one of our contacts
+// Dynamically resolve an unknown @lid to one of our 3 contacts at reply-time.
+// Called only when jid is not already in CONTACT_BY_JID.
 async function resolveContactFromLid(lid) {
   if (CONTACT_BY_JID.has(lid)) return CONTACT_BY_JID.get(lid);
 
   const allContacts = client.sock?.contacts || {};
-  const lidEntry = allContacts[lid];
-  console.log(`[Nudge] contacts[${lid}] =`, JSON.stringify(lidEntry));
 
-  // Strategy 1: @lid entry has a linked phone JID
+  // Check @lid entry in contacts store for phone back-reference
+  const lidEntry = allContacts[lid];
   if (lidEntry) {
-    const phoneRef = lidEntry.lid || lidEntry.phoneJid || lidEntry.linkedJid || lidEntry.jid || lidEntry.id;
+    console.log(`[Nudge] contacts[${lid}] =`, JSON.stringify(lidEntry));
+    const phoneRef = lidEntry.phoneJid || lidEntry.linkedJid || lidEntry.jid;
     if (phoneRef && phoneRef !== lid) {
       for (const contact of CONTACTS) {
-        if (phoneRef.includes(contact.phone)) {
-          NUDGE_JIDS.add(lid);
-          CONTACT_BY_JID.set(lid, contact);
-          console.log(`[Nudge] Resolved ${contact.name} via lidEntry.phoneRef: ${phoneRef}`);
-          return contact;
-        }
+        if (phoneRef.includes(contact.phone)) { learnJid(lid, contact); return contact; }
       }
     }
   }
 
-  // Strategy 2: scan @s.whatsapp.net entries for a back-reference to this @lid
+  // Scan all contacts for @s.whatsapp.net entry with a .lid back-ref to this lid
   for (const [key, val] of Object.entries(allContacts)) {
-    if (!key.endsWith('@s.whatsapp.net') && !key.endsWith('@lid')) continue;
-    const linkedLid = val?.lid || val?.linkedJid;
-    if (linkedLid === lid) {
+    if (!key.endsWith('@s.whatsapp.net')) continue;
+    if (val?.lid === lid || val?.linkedJid === lid) {
       for (const contact of CONTACTS) {
-        if (key.includes(contact.phone)) {
-          NUDGE_JIDS.add(lid);
-          CONTACT_BY_JID.set(lid, contact);
-          console.log(`[Nudge] Resolved ${contact.name} via back-ref from ${key}`);
-          return contact;
-        }
+        if (key.includes(contact.phone)) { learnJid(lid, contact); return contact; }
       }
     }
   }
 
-  // Strategy 3: onWhatsApp lookup (returns @s.whatsapp.net, probably won't match @lid)
+  // onWhatsApp — Baileys 6.7+ may return .lid field; also check .jid in case
   for (const contact of CONTACTS) {
     try {
       const results = await client.sock.onWhatsApp(`+91${contact.phone}`);
-      if (results?.[0]?.jid === lid) {
-        NUDGE_JIDS.add(lid);
-        CONTACT_BY_JID.set(lid, contact);
-        console.log(`[Nudge] Resolved ${contact.name} via onWhatsApp: ${lid}`);
-        return contact;
-      }
+      const res = results?.[0];
+      if (!res) continue;
+      if (res.jid === lid || res.lid === lid) { learnJid(lid, contact); return contact; }
     } catch {}
   }
 
-  // Strategy 4: dump a few contacts entries so we can see the actual data structure
-  const sample = Object.entries(allContacts).slice(0, 5).map(([k,v]) => `${k}=${JSON.stringify(v)}`);
-  console.log(`[Nudge] contacts sample:`, sample.join(' | '));
-
+  console.log(`[Nudge] Could not resolve @lid: ${lid} — contacts sample:`,
+    Object.entries(allContacts).slice(0, 3).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' | '));
   return null;
 }
 
-// Route ALL @lid individual chats to nudge — group chats end in @g.us
+// Strict whitelist — only JIDs we've explicitly learned for our 3 contacts.
+// No catch-all for @lid so random DMs are never intercepted.
 export function isNudgeJid(jid) {
-  if (NUDGE_JIDS.has(jid)) return true;
-  if (jid?.endsWith('@lid')) return true; // resolve happens inside handleNudgeReply
-  return false;
+  return NUDGE_JIDS.has(jid);
 }
 
 export async function handleNudgeReply(jid, text) {
@@ -384,17 +369,10 @@ export async function handleNudgeReply(jid, text) {
       contact = await resolveContactFromLid(jid);
     }
 
-    // Safety fallback: if still unresolved but @lid, allow up to 3 active unknown convos
-    // (almost certainly one of our 3 contacts replying to the campaign)
-    if (!contact && jid?.endsWith('@lid')) {
-      const unknownLids = [...conversations.keys()].filter(k => k.endsWith('@lid') && !CONTACT_BY_JID.has(k));
-      if (unknownLids.length < 3) {
-        contact = { name: "Sir", honorific: "", phone: "unknown" };
-        console.log(`[Nudge] Using fallback contact for unresolved @lid: ${jid}`);
-      }
+    if (!contact) {
+      console.log(`[Nudge] Ignoring message from unrecognised JID: ${jid}`);
+      return; // not one of our 3 contacts — do not reply
     }
-
-    if (!contact) return; // not an @lid or too many unknown convos
     conv = { contact, history: [], shownIds: new Set(), active: true, lastAt: Date.now() };
     conversations.set(jid, conv);
   }
