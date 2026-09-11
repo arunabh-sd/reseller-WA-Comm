@@ -17,6 +17,16 @@ class WhatsAppClient extends EventEmitter {
     this.sock = null;
     this.isReady = false;
     this.latestQR = null;
+    this._msgStore = new Map(); // id → message content, for retransmission
+  }
+
+  // Store a sent message so it can be retransmitted if receiver can't decrypt it.
+  // Without this, Baileys responds to retransmission requests with undefined → wrong message shown.
+  registerSentMsg(id, content) {
+    this._msgStore.set(id, content);
+    if (this._msgStore.size > 500) {
+      this._msgStore.delete(this._msgStore.keys().next().value);
+    }
   }
 
   async connect() {
@@ -32,9 +42,10 @@ class WhatsAppClient extends EventEmitter {
       logger,
       printQRInTerminal: false,
       browser: ["ShopDeck Broadcaster", "Chrome", "1.0.0"],
-      // Required to handle receiver retransmission requests — without this,
-      // receivers see "Waiting for this message" when WhatsApp requests re-delivery
-      getMessage: async () => ({ conversation: "." }),
+      // Return original message content on retransmission requests so receiver
+      // can decrypt. Without this (or with a wrong value like "."), receivers
+      // see "Waiting for this message" or get a spurious "." message.
+      getMessage: async (key) => this._msgStore.get(key.id),
     });
 
     this.sock.ev.on("creds.update", saveCreds);
@@ -137,9 +148,11 @@ class WhatsAppClient extends EventEmitter {
     });
   }
 
-  async sendTextMessage(groupJid, text) {
+  async sendTextMessage(jid, text) {
     if (!this.isReady) throw new Error("WhatsApp not ready");
-    await this.sock.sendMessage(groupJid, { text });
+    const result = await this.sock.sendMessage(jid, { text });
+    if (result?.key?.id) this.registerSentMsg(result.key.id, { conversation: text });
+    return result;
   }
 }
 

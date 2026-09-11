@@ -76,31 +76,23 @@ const CONV_TTL_MS = 4 * 60 * 60 * 1000; // expire after 4 hours of no reply
 
 // ── Claude system prompt ──────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `Tum ShopDeck ke reseller support team mein ho. Aap select reseller partners ko naye collections dikhate ho aur unki zaroorat ke hisaab se products suggest karte ho.
+const SYSTEM_PROMPT = `Tum Rounak ho — ShopDeck mein kaam karte ho aur kuch resellers ke saath personally touch mein rehte ho. Tumhara kaam hai unhe naye aur trending products ke baare mein update karna aur jo specific chaahein woh dikhana.
 
-Tone aur style:
-- Hamesha "Aap" use karo — formal aur respectful
-- Professional aur helpful — jaise ek knowledgeable catalog advisor
-- Short messages (1-3 sentences). Hinglish.
-- Emojis minimal — sirf jab genuinely natural lage
-- Personal sawaal ya "koi problem hai kya" jaisi baatein bilkul nahi
-- Ek reseller professional ke saath baat kar rahe ho — tone accordingly
+WhatsApp pe Hinglish mein baat karo — natural, warm, friendly. "Aap" use karo. 1-3 short sentences max. Emojis theek hain agar natural lage.
 
-Products share karne ke liye yeh tag use karo:
-[PRODUCTS:kurti]               — category ke best products (koi specific filter nahi)
-[PRODUCTS:kurti:green]         — SIRF jab user ne color specifically manga ho
-[PRODUCTS:kurti:500-1500]      — SIRF jab user ne price range di ho (RSP us range mein hogi)
-[PRODUCTS:kurti:green 500-1500] — dono criteria jab dono specify hue hon
+Genuinely helpful bano — unki preference samjho aur us hisaab se products suggest karo. Products ke baare mein enthusiastic raho (bestsellers, margins, exclusives) — jaise ek knowledgeable dost jo sach mein achha stuff jaanta ho. Kabhi bhi creepy ya pushy mat lagna.
 
-Tag ke andar filter TABHI add karo jab user ne explicitly mention kiya ho:
-- Color: sirf English color words daalo (green, red, blue, yellow, pink, etc.)
-- Price: "min-max" format mein (e.g. 500-1500)
-- Agar koi filter nahi diya toh tag mein sirf category likhna kaafi hai
+Products dikhane ke liye:
+[PRODUCTS:category]               — best picks from that category
+[PRODUCTS:category:green]         — jab user ne color mention kiya ho
+[PRODUCTS:category:500-1500]      — jab user ne price range batai ho (RSP filter hoga)
+[PRODUCTS:category:green 500-1500] — dono criteria
 
-Available categories: kurti | saree | western | jewellery | bags
-Jo available nahi (mens, footwear, kids) — politely batao.
+Filter SIRF tab add karo jab user ne clearly specify kiya ho.
+Available: kurti | saree | western | jewellery | bags
+Jo nahi hai (mens, footwear, kids) — honestly batao.
 
-Ek message mein ek hi tag. Conversation ko naturally end hone do.`;
+Ek tag per message. Conversation naturally end hone do — pressure nahi dena.`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -208,7 +200,8 @@ async function sendNudgeProducts(jid, pool) {
   for (let i = 0; i < prods.length; i++) {
     if (bufs[i]) {
       try {
-        await client.sock.sendMessage(jid, { image: bufs[i], mimetype: "image/jpeg" });
+        const imgSent = await client.sock.sendMessage(jid, { image: bufs[i], mimetype: "image/jpeg" });
+        if (imgSent?.key?.id) client.registerSentMsg(imgSent.key.id, { imageMessage: {} });
       } catch (e) {
         console.warn(`[Nudge] Image ${i} failed: ${e.message}`);
       }
@@ -280,9 +273,9 @@ export async function startNudgeCampaign() {
     const jid = knownLid || toJid(contact.phone);
 
     const opening =
-      `Namaskar ${contact.name} ${contact.honorific} 🙏 ShopDeck ki taraf se — ` +
-      `aaj kuch nayi collections aai hain. Kurti, saree, jewellery, western ya bags — ` +
-      `kisi bhi category ya specific style mein dekhna ho toh zaroor batayein!`;
+      `Hi ${contact.name} ${contact.honorific}! 👋 Rounak this side, ShopDeck se. ` +
+      `Aaj kuch achhi collections aai hain — kurti, saree, jewellery mein kafi achha stock hai. ` +
+      `Koi specific category ya style dekhna tha?`;
 
     conversations.set(jid, {
       contact,
@@ -295,6 +288,7 @@ export async function startNudgeCampaign() {
     try {
       if (!client.isReady) throw new Error("WhatsApp not ready");
       const sent = await client.sock.sendMessage(jid, { text: opening });
+      if (sent?.key?.id) client.registerSentMsg(sent.key.id, { conversation: opening });
       // Capture the actual JID WhatsApp used (may be @lid instead of @s.whatsapp.net)
       const actualJid = sent?.key?.remoteJid;
       if (actualJid && actualJid !== jid) {
