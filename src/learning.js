@@ -136,7 +136,7 @@ WEIGHT_JSON:
     defaultHeaders: { "x-litellm-api-key": apiKey },
   });
   const msg = await anthropic.messages.create({
-    model:      "claude-haiku-4-5-20251001",
+    model:      "claude-sonnet-4-6",
     max_tokens: 700,
     messages:   [{ role: "user", content: prompt }],
   });

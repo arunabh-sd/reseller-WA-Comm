@@ -4,6 +4,7 @@ import { startQRServer } from "./server.js";
 import { startScheduler } from "./scheduler.js";
 import { warmCache } from "./cache.js";
 import { loadPending, applyPending, TEST_GROUP_JID } from "./pending_changes.js";
+import { isNudgeJid, handleNudgeReply } from "./nudge.js";
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err?.message || err);
@@ -15,12 +16,19 @@ async function main() {
   startQRServer();
   await client.connect();
 
-  // "Yes" listener — applies pending AI-recommended weight changes
+  // Message router
   client.on("message", async ({ jid, text }) => {
+    // Nudge conversation replies (individual contacts)
+    if (isNudgeJid(jid)) {
+      handleNudgeReply(jid, text).catch(e => console.error("[Nudge] Reply handler error:", e.message));
+      return;
+    }
+
+    // "Yes" listener — applies pending AI-recommended weight changes
     if (jid !== TEST_GROUP_JID) return;
     if (text.toLowerCase() !== "yes") return;
     const pending = loadPending();
-    if (!pending) return; // nothing pending or expired
+    if (!pending) return;
     try {
       await applyPending(client);
     } catch (err) {

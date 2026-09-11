@@ -83,7 +83,14 @@ export async function getRankedForSlot({ category, aovBucket }) {
 // caller uses a larger pool so it can replace products whose images fail.
 export async function pickSlotProducts(slot, poolSize = PRODUCTS_PER_SHARE) {
   const n      = PRODUCTS_PER_SHARE;
-  const ranked = await getRankedForSlot(slot);
+  let ranked   = await getRankedForSlot(slot);
+
+  // AOV fallback: if nothing passes the price band, retry with no AOV restriction
+  if (!ranked.length && slot.aovBucket !== "any") {
+    console.log(`[Ranking] ${slot.category}-${slot.aovBucket}: no products in AOV band — retrying without AOV filter`);
+    ranked = await getRankedForSlot({ ...slot, aovBucket: "any" });
+  }
+
   if (!ranked.length) return [];
 
   const subPerf  = loadSubcategoryPerf();

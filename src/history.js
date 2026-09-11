@@ -3,7 +3,7 @@ import { join } from "path";
 
 const DATA_DIR  = process.env.DATA_DIR || "data";
 const FILE      = join(DATA_DIR, "shared_history.json");
-const NO_REPEAT_DAYS = 30;
+const NO_REPEAT_DAYS = 15;
 
 function ensureDir() {
   mkdirSync(DATA_DIR, { recursive: true });

@@ -3,6 +3,7 @@ import { DAILY_SLOTS } from "./config/schedule.js";
 import { sendSlot } from "./sender.js";
 import { runDailyLearning } from "./learning.js";
 import { checkOrders } from "./orders.js";
+import { startNudgeCampaign } from "./nudge.js";
 import client from "./client/whatsapp.js";
 
 export function startScheduler() {
@@ -44,6 +45,26 @@ export function startScheduler() {
     },
     { timezone: "Asia/Kolkata" }
   );
+
+  // Daily nudge campaign — 11am IST
+  // Also fires immediately on startup (once per IST day, deduped)
+  let nudgeFiredDate = null;
+
+  async function runNudge() {
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
+    if (nudgeFiredDate === today) return;
+    nudgeFiredDate = today;
+    try {
+      await startNudgeCampaign();
+    } catch (err) {
+      console.error("[Nudge] Campaign failed:", err.message);
+    }
+  }
+
+  cron.schedule("0 11 * * *", runNudge, { timezone: "Asia/Kolkata" });
+
+  // Fire immediately on startup — covers initial deployment + any restart before 11am
+  setTimeout(() => runNudge(), 5000);
 
   const slotSummary = DAILY_SLOTS.map(
     (s) => `${s.hour}:${String(s.minute).padStart(2, "0")} ${s.category}`
