@@ -76,19 +76,31 @@ const CONV_TTL_MS = 4 * 60 * 60 * 1000; // expire after 4 hours of no reply
 
 // ── Claude system prompt ──────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = `Tum Rounak ho — ShopDeck ke reseller partnership team mein kaam karte ho. Tum personally WhatsApp kar rahe ho apne reseller partners ko, unke saath touch mein rehne ke liye.
+const SYSTEM_PROMPT = `Tum ShopDeck ke reseller support team mein ho. Aap select reseller partners ko naye collections dikhate ho aur unki zaroorat ke hisaab se products suggest karte ho.
 
-Hinglish mein baat karo — jaise actually koi real person karta hai WhatsApp pe. "Aap" use karo respect ke liye. Warm, casual, genuine. Bilkul corporate ya bot jaisa nahi. Short messages — 1-3 sentences max. Emojis theek hain agar natural lage.
+Tone aur style:
+- Hamesha "Aap" use karo — formal aur respectful
+- Professional aur helpful — jaise ek knowledgeable catalog advisor
+- Short messages (1-3 sentences). Hinglish.
+- Emojis minimal — sirf jab genuinely natural lage
+- Personal sawaal ya "koi problem hai kya" jaisi baatein bilkul nahi
+- Ek reseller professional ke saath baat kar rahe ho — tone accordingly
 
-Tumhara goal: unse puchho kya chal raha hai, koi issue hai kya, aur agar koi specific collection ya cheez pasand ho toh woh dikhao. Jab tum products share karna chaho, apne message mein exactly yeh tag daalo: [PRODUCTS:category]
+Products share karne ke liye yeh tag use karo:
+[PRODUCTS:kurti]               — category ke best products (koi specific filter nahi)
+[PRODUCTS:kurti:green]         — SIRF jab user ne color specifically manga ho
+[PRODUCTS:kurti:500-1500]      — SIRF jab user ne price range di ho (RSP us range mein hogi)
+[PRODUCTS:kurti:green 500-1500] — dono criteria jab dono specify hue hon
 
-Category inme se ek hogi: kurti | saree | western | jewellery | bags
+Tag ke andar filter TABHI add karo jab user ne explicitly mention kiya ho:
+- Color: sirf English color words daalo (green, red, blue, yellow, pink, etc.)
+- Price: "min-max" format mein (e.g. 500-1500)
+- Agar koi filter nahi diya toh tag mein sirf category likhna kaafi hai
 
-Ek message mein ek hi baar tag use karo, aur tab hi jab genuinely ready ho dikhane ke liye.
+Available categories: kurti | saree | western | jewellery | bags
+Jo available nahi (mens, footwear, kids) — politely batao.
 
-Agar koi aisa maange jo available nahi (mens wear, footwear, kids, etc.) — politely batao nahi hai abhi.
-
-Conversation naturally khatam hone do — agar woh bye/thanks keh dein toh warmly respond karo, dobara push mat karo.`;
+Ek message mein ek hi tag. Conversation ko naturally end hone do.`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -102,18 +114,39 @@ function sleep(ms) {
 
 // ── Product fetching ──────────────────────────────────────────────────────────
 
-async function fetchNudgePool(category, shownIds) {
+// Parse a filter like "green 500-1500" → { keywords: ["green"], minPrice: 500, maxPrice: 1500 }
+function parseFilter(filterQuery = "") {
+  const priceMatch = filterQuery.match(/(\d+)\s*[-–]\s*(\d+)/);
+  const minPrice = priceMatch ? parseInt(priceMatch[1]) : 0;
+  const maxPrice = priceMatch ? parseInt(priceMatch[2]) : Infinity;
+  const keywordStr = filterQuery.replace(/\d+\s*[-–]\s*\d+/g, "").trim().toLowerCase();
+  const keywords = keywordStr.split(/\s+/).filter(w => w.length >= 3);
+  return { keywords, minPrice, maxPrice, hasPrice: !!priceMatch };
+}
+
+function matchesKeywords(product, keywords) {
+  if (!keywords.length) return true;
+  const text = `${product.product_name} ${product.product_description || ""}`.toLowerCase();
+  return keywords.every(kw => new RegExp(`\\b${kw}\\b`).test(text));
+}
+
+async function fetchNudgePool(category, shownIds, filterQuery = "") {
+  const { keywords, minPrice, maxPrice, hasPrice } = parseFilter(filterQuery);
   const weights    = loadWeights();
   const productMap = await getProductMap();
   const validTypes = new Set(CATEGORY_TYPES[category] || []);
 
   if (!validTypes.size) return [];
 
-  const candidates = [...productMap.values()].filter(p =>
-    validTypes.has(p.clean_product_type) &&
-    !shownIds.has(p.customer_product_short_id) &&
-    (p.reseller_selling_price || 0) > 0
-  );
+  const candidates = [...productMap.values()].filter(p => {
+    if (!validTypes.has(p.clean_product_type)) return false;
+    if (shownIds.has(p.customer_product_short_id)) return false;
+    const price = p.reseller_selling_price || 0;
+    if (!price) return false;
+    if (hasPrice && (price < minPrice || price > maxPrice)) return false;
+    if (!matchesKeywords(p, keywords)) return false;
+    return true;
+  });
 
   if (!candidates.length) return [];
 
@@ -194,19 +227,19 @@ async function sendNudgeProducts(jid, pool) {
 
     const sellerPrice = p.reseller_selling_price || 0;
     const websitePrice = p.website_price || 0;
-    if (sellerPrice) lines.push(`Tumhara price: *${fmt(sellerPrice)}*${websitePrice > sellerPrice ? ` (website pe ${fmt(websitePrice)})` : ""}`);
+    if (sellerPrice) lines.push(`Aapka price: *${fmt(sellerPrice)}*${websitePrice > sellerPrice ? ` (website pe ${fmt(websitePrice)})` : ""}`);
 
     if (p.exclusive) {
       lines.push(`🔒 Exclusive — marketplaces pe nahi milega`);
     } else if (p.mp_price && p.mp_price - sellerPrice >= 100) {
-      lines.push(`💰 ${fmt(p.mp_price - sellerPrice)} sasta than marketplace`);
+      lines.push(`💰 ${fmt(p.mp_price - sellerPrice)} marketplace se sasta`);
     }
 
     lines.push(`🔗 ${p.qrate_url}`);
     lines.push("");
   });
 
-  lines.push("COD + free delivery ✅ Batao kaisa laga!");
+  lines.push("COD + free delivery ✅ Zaroor batayein kaisa laga!");
 
   await client.sendTextMessage(jid, lines.join("\n").trim());
   return prods;
@@ -240,12 +273,16 @@ export async function startNudgeCampaign() {
   console.log("[Nudge] Starting daily campaign…");
 
   for (const contact of CONTACTS) {
-    const jid = toJid(contact.phone);
+    // Prefer known @lid over @s.whatsapp.net to avoid "waiting for this message" on receiver
+    const knownLid = [...CONTACT_BY_JID.entries()].find(
+      ([j, c]) => c === contact && j.endsWith("@lid")
+    )?.[0];
+    const jid = knownLid || toJid(contact.phone);
 
     const opening =
-      `Hi ${contact.name} ${contact.honorific}! 👋 Rounak this side, ShopDeck se. ` +
-      `Kaise ho aap? Aaj kuch naya collection dekhna hai? ` +
-      `Ya koi cheez thi jo pehle pasand nahi aayi? Batao, dekh lete hain 😊`;
+      `Namaskar ${contact.name} ${contact.honorific} 🙏 ShopDeck ki taraf se — ` +
+      `aaj kuch nayi collections aai hain. Kurti, saree, jewellery, western ya bags — ` +
+      `kisi bhi category ya specific style mein dekhna ho toh zaroor batayein!`;
 
     conversations.set(jid, {
       contact,
@@ -380,9 +417,9 @@ export async function handleNudgeReply(jid, text) {
   }
   if (!aiText) return;
 
-  // Parse product tag
-  const match     = aiText.match(/\[PRODUCTS:(\w+)\]/i);
-  const cleanText = aiText.replace(/\[PRODUCTS:\w+\]/gi, "").trim();
+  // Parse product tag — [PRODUCTS:category] or [PRODUCTS:category:filter]
+  const match     = aiText.match(/\[PRODUCTS:(\w+)(?::([^\]]+))?\]/i);
+  const cleanText = aiText.replace(/\[PRODUCTS:\w+(?::[^\]]+)?\]/gi, "").trim();
 
   conv.history.push({ role: "assistant", content: cleanText || aiText });
 
@@ -397,19 +434,20 @@ export async function handleNudgeReply(jid, text) {
 
   // Send products if Claude requested them
   if (match) {
-    const category = match[1].toLowerCase();
+    const category    = match[1].toLowerCase();
+    const filterQuery = match[2]?.trim() || "";
     await sleep(800);
     try {
-      const pool = await fetchNudgePool(category, conv.shownIds);
+      const pool = await fetchNudgePool(category, conv.shownIds, filterQuery);
       if (pool.length) {
         const sent = await sendNudgeProducts(jid, pool);
         sent.forEach(p => conv.shownIds.add(p.customer_product_short_id));
-        console.log(`[Nudge] Sent ${sent.length} ${category} products to ${conv.contact.name}`);
+        console.log(`[Nudge] Sent ${sent.length} ${category}${filterQuery ? ` [${filterQuery}]` : ""} products to ${conv.contact.name}`);
       } else {
-        await client.sendTextMessage(
-          jid,
-          `Hmm, is waqt ${category} mein kuch naya nahi dikh raha. Koi aur category try karein? 😊`
-        );
+        const noMatchMsg = filterQuery
+          ? `Is waqt "${filterQuery}" ke matching koi product available nahi hai. Kya aap koi aur preference batayenge?`
+          : `Is waqt ${category} mein kuch available nahi hai. Koi aur category try karein?`;
+        await client.sendTextMessage(jid, noMatchMsg);
       }
     } catch (err) {
       console.error("[Nudge] Product send failed:", err.message);

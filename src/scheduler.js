@@ -4,6 +4,7 @@ import { sendSlot } from "./sender.js";
 import { runDailyLearning } from "./learning.js";
 import { checkOrders } from "./orders.js";
 import { startNudgeCampaign } from "./nudge.js";
+import { warmCache } from "./cache.js";
 import client from "./client/whatsapp.js";
 
 export function startScheduler() {
@@ -22,6 +23,13 @@ export function startScheduler() {
       { timezone: "Asia/Kolkata" }
     );
   }
+
+  // Daily cache refresh — 5:45am IST (fresh data before first slot)
+  cron.schedule(
+    "45 5 * * *",
+    () => warmCache().catch(e => console.error("[cache] Daily refresh failed:", e.message)),
+    { timezone: "Asia/Kolkata" }
+  );
 
   // Daily learning — 8:45am IST (before 9am slots fire)
   cron.schedule(

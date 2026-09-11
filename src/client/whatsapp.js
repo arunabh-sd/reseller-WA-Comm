@@ -32,6 +32,9 @@ class WhatsAppClient extends EventEmitter {
       logger,
       printQRInTerminal: false,
       browser: ["ShopDeck Broadcaster", "Chrome", "1.0.0"],
+      // Required to handle receiver retransmission requests — without this,
+      // receivers see "Waiting for this message" when WhatsApp requests re-delivery
+      getMessage: async () => ({ conversation: "." }),
     });
 
     this.sock.ev.on("creds.update", saveCreds);

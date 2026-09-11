@@ -3,7 +3,7 @@ import { createRequire } from "module";
 const require = createRequire(import.meta.url);
 const PRODUCT_LABELS = require("./data/product_labels.json");
 
-const REFRESH_MS = 2 * 60 * 60 * 1000; // 2 hours
+const REFRESH_MS = 26 * 60 * 60 * 1000; // 26h — refreshed on schedule, not on-demand
 
 function toSlug(name) {
   if (!name) return "product";
@@ -33,6 +33,7 @@ function buildMap(feed, meta) {
       customer_product_short_id: id,
       customer_sku_short_id:     row.customer_sku_short_id,
       product_name:              row.product_name,
+      product_description:       row.product_description || "",
       sharable_desc:             m.sharable_desc || "",
       img_link:                  row.img_link || "",
       qrate_url:                 `https://qrate.shopdeck.com/${toSlug(row.product_name)}/catalogue/${id}/${row.customer_sku_short_id}`,
