@@ -315,14 +315,17 @@ export async function processWelcomeQueue() {
         });
         await new Promise(r => setTimeout(r, 1000));
       }
-      await client.sendTextMessage(entry.memberJid, welcomeMsg);
-      activeWelcomeConvos.set(entry.memberJid, {
+      const sent = await client.sendTextMessage(entry.memberJid, welcomeMsg);
+      // Baileys normalises @lid → @s.whatsapp.net on send; use the returned JID
+      // so isWelcomeJid() matches incoming messages correctly.
+      const canonicalJid = sent?.key?.remoteJid || entry.memberJid;
+      activeWelcomeConvos.set(canonicalJid, {
         history:      [{ role: "assistant", content: welcomeMsg }],
         lastAt:       Date.now(),
         communityJid: entry.groupJid,
         shownIds:     new Set(),
       });
-      console.log(`[Community] Welcomed ${entry.memberJid}${videoBuffer ? " (with video)" : ""}`);
+      console.log(`[Community] Welcomed ${canonicalJid}${videoBuffer ? " (with video)" : ""}`);
       await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
     } catch (e) {
       console.warn(`[Community] Welcome failed for ${entry.memberJid}:`, e.message);
