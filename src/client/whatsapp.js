@@ -9,7 +9,10 @@ import pino from "pino";
 import { EventEmitter } from "events";
 import fs from "fs";
 
-const AUTH_DIR = process.env.AUTH_DIR || "auth";
+// Default to DATA_DIR/auth so session files land on the Railway volume.
+// Without this, auth is in ephemeral /app/auth → lost on every deploy → Bad MAC.
+const AUTH_DIR = process.env.AUTH_DIR ||
+  (process.env.DATA_DIR ? `${process.env.DATA_DIR}/auth` : "auth");
 const logger = pino({ level: "silent" }); // Baileys internal logs off
 
 // Persist sent messages across Railway redeploys so retransmission works without "." fallback
@@ -96,6 +99,7 @@ class WhatsAppClient extends EventEmitter {
     // Only on first startup — not on auto-reconnects
     if (!this._sessionsCleaned) {
       this._sessionsCleaned = true;
+      console.log(`[WhatsApp] Auth dir: ${AUTH_DIR}`);
       this._cleanStaleSessions();
     }
 
