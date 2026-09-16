@@ -269,7 +269,7 @@ Jo available nahi (mens, kids, footwear) — honestly batao.
 RULES:
 - Hinglish, warm aur helpful, 1-3 sentences max
 - Koi bhi cheez invent mat karo jo upar nahi di — URLs, features, pricing, policies
-- Pehle message ke baad sirf tab respond karo jab reseller ne kuch poocha ya maanga ho`;
+- Har message ka jawab do — reseller ne kuch bhi bheja ho`;
 
 // In-memory active conversations: @s.whatsapp.net JID → { history, lastAt, communityJid, shownIds }
 const activeWelcomeConvos = new Map();
@@ -348,7 +348,7 @@ async function getAIReply(history) {
   return msg.content[0]?.text?.trim() || null;
 }
 
-export async function handleWelcomeReply(jid, text) {
+export async function handleResellerReply(jid, text) {
   let conv = activeWelcomeConvos.get(jid);
   if (!conv) {
     conv = { history: [], lastAt: Date.now(), shownIds: new Set() };
@@ -359,14 +359,21 @@ export async function handleWelcomeReply(jid, text) {
   conv.history.push({ role: "user", content: text });
   if (conv.history.length > 10) conv.history = conv.history.slice(-10);
 
+  console.log(`[Reseller] Getting AI reply for ${jid} (history: ${conv.history.length} msgs)`);
+
   let aiText;
   try {
     aiText = await getAIReply(conv.history);
   } catch (e) {
-    console.error("[Community] Claude error:", e.message);
+    console.error("[Reseller] Claude error:", e.message);
     return;
   }
-  if (!aiText) return;
+  if (!aiText) {
+    console.warn(`[Reseller] Empty AI reply for ${jid}`);
+    return;
+  }
+  console.log(`[Reseller] Replying to ${jid}: "${aiText.slice(0, 60)}"`);
+
 
   // Parse optional product tag
   const match     = aiText.match(/\[PRODUCTS:(\w+)(?::([^\]]+))?\]/i);

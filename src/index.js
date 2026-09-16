@@ -5,7 +5,7 @@ import { startScheduler } from "./scheduler.js";
 import { warmCache } from "./cache.js";
 import { loadPending, applyPending, TEST_GROUP_JID } from "./pending_changes.js";
 import { isNudgeJid, handleNudgeReply, resolveContactJids } from "./nudge.js";
-import { pollCommunityMembers, handleWelcomeReply } from "./community.js";
+import { pollCommunityMembers, handleResellerReply } from "./community.js";
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err?.message || err);
@@ -19,11 +19,7 @@ async function main() {
 
   // Message router
   client.on("message", async ({ jid, text }) => {
-    // Nudge DM conversations
-    if (isNudgeJid(jid)) {
-      handleNudgeReply(jid, text).catch(e => console.error("[Nudge] Reply handler error:", e.message));
-      return;
-    }
+    console.log(`[Router] DM from=${jid} text="${text.slice(0, 50)}"`);
 
     // Test group — "Yes" applies pending weight changes
     if (jid === TEST_GROUP_JID) {
@@ -35,11 +31,15 @@ async function main() {
       return;
     }
 
-    // Ignore other group messages
+    // Never reply to groups
     if (jid.endsWith("@g.us")) return;
 
-    // Any individual DM → welcome / support chatbot
-    handleWelcomeReply(jid, text).catch(e => console.error("[Community] Welcome reply error:", e.message));
+    // Active nudge conversations get the nudge chatbot; everything else → reseller chatbot
+    if (isNudgeJid(jid)) {
+      handleNudgeReply(jid, text).catch(e => console.error("[Nudge] Reply handler error:", e.message));
+    } else {
+      handleResellerReply(jid, text).catch(e => console.error("[Reseller] Reply error:", e.message));
+    }
   });
 
   client.once("ready", () => {
