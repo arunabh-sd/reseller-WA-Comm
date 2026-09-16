@@ -185,7 +185,8 @@ export async function sendSlot(slot, communitiesOnly = false) {
     for (let i = 0; i < products.length; i++) {
       if (buffers[i]) {
         try {
-          await client.sock.sendMessage(jid, { image: buffers[i], mimetype: "image/jpeg" });
+          const imgSent = await client.sock.sendMessage(jid, { image: buffers[i], mimetype: "image/jpeg" });
+          if (imgSent?.key?.id) client.registerSentMsg(imgSent.key.id, { imageMessage: {} });
         } catch (imgErr) {
           console.warn(`[Slot] Image ${i} send failed for ${jid}: ${imgErr.message}`);
         }

@@ -29,20 +29,23 @@ class WhatsAppClient extends EventEmitter {
     this._loadMsgStore();
   }
 
-  // Clear all Signal session/key files except creds.json on first startup.
-  // This forces fresh session establishment and eliminates "Bad MAC" / "Waiting for this message"
-  // caused by stale session state after a Railway redeploy.
-  // creds.json (identity + registration) is preserved — no QR rescan needed.
+  // Clear only pairwise Signal session files on first startup.
+  // This fixes "Bad MAC" on DM decryption (stale per-contact sessions after redeploy)
+  // WITHOUT touching group sender-key files — deleting those forces redistribution
+  // to all group members, which can partially fail on large communities and cause
+  // "Waiting for this message" in the broadcast groups.
+  // creds.json (identity) and sender-key-* (group keys) are preserved.
   _cleanStaleSessions() {
     try {
       const files = fs.readdirSync(AUTH_DIR);
       let cleared = 0;
       for (const file of files) {
-        if (file === "creds.json") continue;
+        // Keep identity, group sender keys, pre-keys, app-state
+        if (!file.startsWith("session-")) continue;
         fs.unlinkSync(`${AUTH_DIR}/${file}`);
         cleared++;
       }
-      if (cleared > 0) console.log(`[WhatsApp] Cleared ${cleared} stale session files → fresh Signal sessions`);
+      if (cleared > 0) console.log(`[WhatsApp] Cleared ${cleared} stale pairwise sessions → fresh DM sessions`);
     } catch (e) {
       if (e.code !== "ENOENT") console.warn("[WhatsApp] Session clean failed:", e.message);
     }
