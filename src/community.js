@@ -1,8 +1,26 @@
 import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
 import client from "./client/whatsapp.js";
 import { TEST_GROUP_JID } from "./pending_changes.js";
 import { fetchNudgePool, sendNudgeProducts } from "./nudge.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const VIDEO_PATH = path.join(__dirname, "../assets/intro.mp4");
+
+let _videoBuffer = null;
+function getVideoBuffer() {
+  if (!_videoBuffer) {
+    try {
+      _videoBuffer = fs.readFileSync(VIDEO_PATH);
+    } catch {
+      console.warn("[Community] Welcome video not found:", VIDEO_PATH);
+      return null;
+    }
+  }
+  return _videoBuffer;
+}
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -259,6 +277,14 @@ export async function processWelcomeQueue() {
     const welcomeMsg = buildWelcomeMessage(entry.groupJid);
 
     try {
+      const videoBuffer = getVideoBuffer();
+      if (videoBuffer) {
+        await client.sock.sendMessage(entry.memberJid, {
+          video: videoBuffer,
+          mimetype: "video/mp4",
+        });
+        await new Promise(r => setTimeout(r, 1000));
+      }
       await client.sendTextMessage(entry.memberJid, welcomeMsg);
       activeWelcomeConvos.set(entry.memberJid, {
         history:      [{ role: "assistant", content: welcomeMsg }],
@@ -266,7 +292,7 @@ export async function processWelcomeQueue() {
         communityJid: entry.groupJid,
         shownIds:     new Set(),
       });
-      console.log(`[Community] Welcomed ${entry.memberJid}`);
+      console.log(`[Community] Welcomed ${entry.memberJid}${videoBuffer ? " (with video)" : ""}`);
       await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
     } catch (e) {
       console.warn(`[Community] Welcome failed for ${entry.memberJid}:`, e.message);
