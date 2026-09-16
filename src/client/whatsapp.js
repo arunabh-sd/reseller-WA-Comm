@@ -29,23 +29,33 @@ class WhatsAppClient extends EventEmitter {
     this._loadMsgStore();
   }
 
-  // Clear only pairwise Signal session files on first startup.
-  // This fixes "Bad MAC" on DM decryption (stale per-contact sessions after redeploy)
-  // WITHOUT touching group sender-key files — deleting those forces redistribution
-  // to all group members, which can partially fail on large communities and cause
-  // "Waiting for this message" in the broadcast groups.
-  // creds.json (identity) and sender-key-* (group keys) are preserved.
+  // On first startup, clear stale pairwise sessions AND sender-key-memory.
+  //
+  // session-*          → pairwise DM Signal sessions. Deleting fixes "Bad MAC" / "Waiting"
+  //                      for nudge DM contacts after a Railway redeploy.
+  //
+  // sender-key-memory-* → Baileys' record of which group members already received the
+  //                       sender key distribution message. If stale, Baileys skips
+  //                       redistribution and members who missed it see "Waiting for this
+  //                       message" in broadcast groups. Clearing forces full redistribution
+  //                       to all group members on the next send — safe, just slightly
+  //                       more traffic on the first slot after startup.
+  //
+  // sender-key-*        → the actual group sender key chains — PRESERVED so we don't
+  //                       rotate keys unnecessarily (re-distribute same key, not new one).
+  // creds.json          → PRESERVED — identity + registration (no QR rescan needed).
   _cleanStaleSessions() {
     try {
       const files = fs.readdirSync(AUTH_DIR);
       let cleared = 0;
       for (const file of files) {
-        // Keep identity, group sender keys, pre-keys, app-state
-        if (!file.startsWith("session-")) continue;
+        if (!file.startsWith("session-") && !file.startsWith("sender-key-memory-")) continue;
         fs.unlinkSync(`${AUTH_DIR}/${file}`);
         cleared++;
       }
-      if (cleared > 0) console.log(`[WhatsApp] Cleared ${cleared} stale pairwise sessions → fresh DM sessions`);
+      if (cleared > 0) {
+        console.log(`[WhatsApp] Cleared ${cleared} stale session/memory files → fresh sessions + group key redistribution`);
+      }
     } catch (e) {
       if (e.code !== "ENOENT") console.warn("[WhatsApp] Session clean failed:", e.message);
     }
