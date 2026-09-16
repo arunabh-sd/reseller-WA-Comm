@@ -135,6 +135,10 @@ class WhatsAppClient extends EventEmitter {
       }
     });
 
+    this.sock.ev.on("group-participants.update", (update) => {
+      this.emit("participants-update", update);
+    });
+
     this.sock.ev.on("connection.update", (update) => {
       const { connection, lastDisconnect, qr } = update;
 

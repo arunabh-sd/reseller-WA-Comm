@@ -5,6 +5,7 @@ import { runDailyLearning } from "./learning.js";
 import { checkOrders } from "./orders.js";
 import { startNudgeCampaign } from "./nudge.js";
 import { warmCache } from "./cache.js";
+import { sendYesterdayReport, sendTodayReport, processWelcomeQueue } from "./community.js";
 import client from "./client/whatsapp.js";
 
 export function startScheduler() {
@@ -53,6 +54,30 @@ export function startScheduler() {
     },
     { timezone: "Asia/Kolkata" }
   );
+
+  // ── Community member reports ───────────────────────────────────────────────
+
+  // 8:30am IST — yesterday's final joiner/leaver count
+  cron.schedule("30 8 * * *",
+    () => sendYesterdayReport().catch(e => console.error("[Community] Yesterday report failed:", e.message)),
+    { timezone: "Asia/Kolkata" }
+  );
+
+  // 3pm, 6pm, 9pm IST — today's running count
+  for (const hour of [15, 18, 21]) {
+    cron.schedule(`0 ${hour} * * *`,
+      () => sendTodayReport().catch(e => console.error("[Community] Today report failed:", e.message)),
+      { timezone: "Asia/Kolkata" }
+    );
+  }
+
+  // Every 30 min during business hours — send welcome DMs to new joiners
+  cron.schedule("*/30 9-19 * * *",
+    () => processWelcomeQueue().catch(e => console.error("[Community] Welcome queue failed:", e.message)),
+    { timezone: "Asia/Kolkata" }
+  );
+
+  // ── Daily nudge campaign ───────────────────────────────────────────────────
 
   // Daily nudge campaign — 11am IST
   // Also fires immediately on startup (once per IST day, deduped)

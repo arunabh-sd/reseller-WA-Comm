@@ -5,6 +5,7 @@ import { startScheduler } from "./scheduler.js";
 import { warmCache } from "./cache.js";
 import { loadPending, applyPending, TEST_GROUP_JID } from "./pending_changes.js";
 import { isNudgeJid, handleNudgeReply, resolveContactJids } from "./nudge.js";
+import { trackParticipantUpdate, isWelcomeJid, handleWelcomeReply } from "./community.js";
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err?.message || err);
@@ -25,6 +26,11 @@ async function main() {
       return;
     }
 
+    if (isWelcomeJid(jid)) {
+      handleWelcomeReply(jid, text).catch(e => console.error("[Community] Welcome reply error:", e.message));
+      return;
+    }
+
     // "Yes" listener — applies pending AI-recommended weight changes
     if (jid !== TEST_GROUP_JID) return;
     if (text.toLowerCase() !== "yes") return;
@@ -35,6 +41,10 @@ async function main() {
     } catch (err) {
       console.error("[Pending] Apply failed:", err.message);
     }
+  });
+
+  client.on("participants-update", ({ id, participants, action }) => {
+    trackParticipantUpdate(id, action, participants);
   });
 
   client.once("ready", () => {

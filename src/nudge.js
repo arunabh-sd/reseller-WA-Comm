@@ -120,7 +120,7 @@ function parseFilter(filterQuery = "") {
 
 // Search product_name + product_description for all terms.
 // Category word uses substring match (flexible); colour/style keywords use word boundary (strict).
-async function fetchNudgePool(category, shownIds, filterQuery = "") {
+export async function fetchNudgePool(category, shownIds, filterQuery = "") {
   const { keywords, minPrice, maxPrice, hasPrice } = parseFilter(filterQuery);
   const weights    = loadWeights();
   const productMap = await getProductMap();
@@ -181,7 +181,7 @@ async function fetchImage(url, attempt = 1) {
 }
 
 // Send 4 products: image burst → conversational text
-async function sendNudgeProducts(jid, pool) {
+export async function sendNudgeProducts(jid, pool) {
   // Fetch images in parallel, select best 4 with valid images
   const fetched = await Promise.all(
     pool.map(async p => ({ product: p, buffer: await fetchImage(p.img_link) }))
