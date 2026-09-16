@@ -136,6 +136,7 @@ class WhatsAppClient extends EventEmitter {
     });
 
     this.sock.ev.on("group-participants.update", (update) => {
+      console.log(`[WA] participants-update:`, JSON.stringify(update));
       this.emit("participants-update", update);
     });
 
