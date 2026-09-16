@@ -94,7 +94,7 @@ function trackParticipantUpdate(groupJid, action, memberJids) {
         data.today[groupJid].joined.push(jid);
       }
       const alreadyQueued = data.pendingWelcome.some(e => e.memberJid === jid);
-      if (!alreadyQueued && !activeWelcomeConvos.has(jid)) {
+      if (!alreadyQueued && !_welcomedLids.has(jid)) {
         data.pendingWelcome.push({ memberJid: jid, groupJid, joinedAt: Date.now() });
       }
     } else if (action === "remove") {
@@ -271,12 +271,12 @@ RULES:
 - Koi bhi cheez invent mat karo jo upar nahi di — URLs, features, pricing, policies
 - Pehle message ke baad sirf tab respond karo jab reseller ne kuch poocha ya maanga ho`;
 
-// In-memory active conversations: memberJid → { history, lastAt, communityJid, shownIds }
+// In-memory active conversations: @s.whatsapp.net JID → { history, lastAt, communityJid, shownIds }
 const activeWelcomeConvos = new Map();
 
-export function isWelcomeJid(jid) {
-  return activeWelcomeConvos.has(jid);
-}
+// LIDs we already welcomed this process lifetime — prevents double-welcoming
+// after someone rejoins. Separate from activeWelcomeConvos because @lid ≠ @s.whatsapp.net.
+const _welcomedLids = new Set();
 
 function isBusinessHours() {
   const hour = parseInt(
@@ -315,17 +315,12 @@ export async function processWelcomeQueue() {
         });
         await new Promise(r => setTimeout(r, 1000));
       }
-      const sent = await client.sendTextMessage(entry.memberJid, welcomeMsg);
-      // Baileys normalises @lid → @s.whatsapp.net on send; use the returned JID
-      // so isWelcomeJid() matches incoming messages correctly.
-      const canonicalJid = sent?.key?.remoteJid || entry.memberJid;
-      activeWelcomeConvos.set(canonicalJid, {
-        history:      [{ role: "assistant", content: welcomeMsg }],
-        lastAt:       Date.now(),
-        communityJid: entry.groupJid,
-        shownIds:     new Set(),
-      });
-      console.log(`[Community] Welcomed ${canonicalJid}${videoBuffer ? " (with video)" : ""}`);
+      await client.sendTextMessage(entry.memberJid, welcomeMsg);
+      // Mark as welcomed by LID — prevents re-queuing if they rejoin this session.
+      // activeWelcomeConvos is NOT keyed here: @lid ≠ incoming @s.whatsapp.net JID.
+      // Replies are caught by the catch-all DM router in index.js.
+      _welcomedLids.add(entry.memberJid);
+      console.log(`[Community] Welcomed ${entry.memberJid}${videoBuffer ? " (with video)" : ""}`);
       await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
     } catch (e) {
       console.warn(`[Community] Welcome failed for ${entry.memberJid}:`, e.message);
