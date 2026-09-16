@@ -5,7 +5,7 @@ import { runDailyLearning } from "./learning.js";
 import { checkOrders } from "./orders.js";
 import { startNudgeCampaign } from "./nudge.js";
 import { warmCache } from "./cache.js";
-import { sendYesterdayReport, sendTodayReport, processWelcomeQueue } from "./community.js";
+import { sendYesterdayReport, sendTodayReport, processWelcomeQueue, pollCommunityMembers } from "./community.js";
 import client from "./client/whatsapp.js";
 
 export function startScheduler() {
@@ -71,9 +71,12 @@ export function startScheduler() {
     );
   }
 
-  // Every 30 min during business hours — send welcome DMs to new joiners
+  // Every 30 min during business hours — poll member lists, then send welcome DMs
   cron.schedule("*/30 9-19 * * *",
-    () => processWelcomeQueue().catch(e => console.error("[Community] Welcome queue failed:", e.message)),
+    async () => {
+      await pollCommunityMembers().catch(e => console.error("[Community] Poll failed:", e.message));
+      await processWelcomeQueue().catch(e => console.error("[Community] Welcome queue failed:", e.message));
+    },
     { timezone: "Asia/Kolkata" }
   );
 

@@ -5,7 +5,7 @@ import { startScheduler } from "./scheduler.js";
 import { warmCache } from "./cache.js";
 import { loadPending, applyPending, TEST_GROUP_JID } from "./pending_changes.js";
 import { isNudgeJid, handleNudgeReply, resolveContactJids } from "./nudge.js";
-import { trackParticipantUpdate, isWelcomeJid, handleWelcomeReply } from "./community.js";
+import { pollCommunityMembers, isWelcomeJid, handleWelcomeReply } from "./community.js";
 
 process.on("unhandledRejection", (err) => {
   console.error("Unhandled rejection:", err?.message || err);
@@ -43,14 +43,12 @@ async function main() {
     }
   });
 
-  client.on("participants-update", ({ id, participants, action }) => {
-    trackParticipantUpdate(id, action, participants);
-  });
-
   client.once("ready", () => {
     startScheduler();
     warmCache().catch((e) => console.error("[cache] Warm failed:", e?.message));
     resolveContactJids(client.sock).catch((e) => console.error("[Nudge] JID resolve failed:", e.message));
+    // Initial snapshot — subsequent polls (every 30 min) will diff against this
+    pollCommunityMembers().catch((e) => console.error("[Community] Initial poll failed:", e.message));
   });
 
   client.once("logged_out", () => {

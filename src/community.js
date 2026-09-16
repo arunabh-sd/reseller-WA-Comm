@@ -81,9 +81,11 @@ function getStore() {
 
 // ── Member tracking ───────────────────────────────────────────────────────────
 
-export function trackParticipantUpdate(groupJid, action, memberJids) {
-  if (!COMMUNITY_JIDS.includes(groupJid)) return;
+// group-participants.update does NOT fire for WhatsApp community parent JIDs.
+// We poll groupMetadata every 30 min and diff against this snapshot instead.
+const _memberSnapshot = new Map(); // communityJid → Set<participantJid>
 
+function trackParticipantUpdate(groupJid, action, memberJids) {
   const data = getStore();
 
   for (const jid of memberJids) {
@@ -105,6 +107,34 @@ export function trackParticipantUpdate(groupJid, action, memberJids) {
   saveData(data);
   const name = COMMUNITY_NAMES[groupJid] || groupJid;
   console.log(`[Community] ${action} ${memberJids.length} in ${name}`);
+}
+
+// Call this on startup and every 30 min. On first run it just takes a baseline
+// snapshot; subsequent runs diff and call trackParticipantUpdate for deltas.
+export async function pollCommunityMembers() {
+  for (const jid of COMMUNITY_JIDS) {
+    try {
+      const meta = await client.sock.groupMetadata(jid);
+      const current = new Set(meta.participants.map(p => p.id));
+      const prev = _memberSnapshot.get(jid);
+
+      if (!prev) {
+        _memberSnapshot.set(jid, current);
+        console.log(`[Community] Snapshot: ${current.size} members in ${COMMUNITY_NAMES[jid] || jid}`);
+        continue;
+      }
+
+      const joined = [...current].filter(id => !prev.has(id));
+      const left   = [...prev].filter(id => !current.has(id));
+
+      if (joined.length) trackParticipantUpdate(jid, "add", joined);
+      if (left.length)   trackParticipantUpdate(jid, "remove", left);
+
+      _memberSnapshot.set(jid, current);
+    } catch (e) {
+      console.warn(`[Community] Poll failed for ${jid}:`, e.message);
+    }
+  }
 }
 
 // ── Member count reports ──────────────────────────────────────────────────────
