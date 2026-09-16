@@ -29,32 +29,31 @@ class WhatsAppClient extends EventEmitter {
     this._loadMsgStore();
   }
 
-  // On first startup, clear stale pairwise sessions AND sender-key-memory.
+  // On first startup, clear sender-key-memory only.
   //
-  // session-*          → pairwise DM Signal sessions. Deleting fixes "Bad MAC" / "Waiting"
-  //                      for nudge DM contacts after a Railway redeploy.
+  // sender-key-memory-* → Baileys' record of which group members received the sender key
+  //                       distribution. Stale memory causes Baileys to skip redistribution
+  //                       → "Waiting for this message" in broadcast groups. Clearing forces
+  //                       full redistribution on the next send.
   //
-  // sender-key-memory-* → Baileys' record of which group members already received the
-  //                       sender key distribution message. If stale, Baileys skips
-  //                       redistribution and members who missed it see "Waiting for this
-  //                       message" in broadcast groups. Clearing forces full redistribution
-  //                       to all group members on the next send — safe, just slightly
-  //                       more traffic on the first slot after startup.
-  //
-  // sender-key-*        → the actual group sender key chains — PRESERVED so we don't
-  //                       rotate keys unnecessarily (re-distribute same key, not new one).
-  // creds.json          → PRESERVED — identity + registration (no QR rescan needed).
+  // session-*           → pairwise DM Signal sessions — PRESERVED. Clearing them breaks
+  //                       existing DM sessions: contacts who message us before we message
+  //                       them back get Bad MAC loops because their phone still encrypts
+  //                       with the old session key. The getMessage callback (returning
+  //                       stored content or "." as fallback) handles DM "Waiting" correctly.
+  // creds.json          → PRESERVED — identity (no QR rescan).
+  // sender-key-*        → PRESERVED — actual key chains (re-distribute same key, not new).
   _cleanStaleSessions() {
     try {
       const files = fs.readdirSync(AUTH_DIR);
       let cleared = 0;
       for (const file of files) {
-        if (!file.startsWith("session-") && !file.startsWith("sender-key-memory-")) continue;
+        if (!file.startsWith("sender-key-memory-")) continue;
         fs.unlinkSync(`${AUTH_DIR}/${file}`);
         cleared++;
       }
       if (cleared > 0) {
-        console.log(`[WhatsApp] Cleared ${cleared} stale session/memory files → fresh sessions + group key redistribution`);
+        console.log(`[WhatsApp] Cleared ${cleared} sender-key-memory files → group key redistribution`);
       }
     } catch (e) {
       if (e.code !== "ENOENT") console.warn("[WhatsApp] Session clean failed:", e.message);
