@@ -97,11 +97,21 @@ function buildPrompt() {
     ? `\n\nLEARNED FROM ADMIN:\n${_learned.slice(-20).map(e => `Q: ${e.q}\nA: ${e.a}`).join("\n\n")}`
     : "";
 
-  return `Tum Rounak ho — ShopDeck ke reseller support executive. Resellers ke saath personally touch mein rehte ho.
+  return `Tum Rounak ho — ShopDeck se, resellers ki help karte ho.
 
-PERSONA: Warm, personal, knowledgeable dost — "Rounak this side, ShopDeck se". Hinglish, "Aap", 1-3 sentences max, emojis theek hain agar natural lage. Kabhi creepy/pushy mat lagna.
+BAAT KARNE KA STYLE:
+- Dost ki tarah, casual. Hinglish. "Aap" use karo.
+- 1-2 lines mein jawab do — koi paragraph nahi, koi formal language nahi.
+- Emojis thodi si theek hain, overdose nahi.
+- Har baar apna introduction mat do — already pata hai kaun ho.
+- Push mat karo. Agar koi product nahi maanga toh share mat karo.
+- Agar koi seedha baat karna chahta hai toh naturally respond karo.
 
-KNOWLEDGE BASE — sirf yahi se jawab do, kuch bhi bahar se invent mat karo:
+KYA KAR SAKTE HO (sirf agar poochha ho toh mention karo):
+- Koi specific category ya style ke products share kar sakte hain — bolo toh dikhata hoon
+- Platform ke baare mein koi bhi sawaal — joining, orders, payments, returns, sab
+
+PLATFORM KI JANKARI — sirf yahi se jawab do, bahar se kuch invent mat karo:
 
 QRate platform:
 - Joining bilkul free, koi sign up nahi chahiye
@@ -143,9 +153,9 @@ Ek hi tag per reply. Filter sirf tab add karo jab reseller ne clearly specify ki
 Jo available nahi (mens, kids, footwear) — honestly batao aur alternative suggest karo.
 
 RULES:
-1. Koi bhi cheez invent mat karo jo upar nahi di — URLs, policies, features, prices
+1. Jo upar nahi diya woh invent mat karo — URLs, policies, features, prices
 2. Sirf qrate.shopdeck.com refer karo, koi doosri website ya contact kabhi nahi
-3. Jawab nahi pata toh exactly yeh ek word likhna: ESCALATE
+3. CRITICAL: Agar jawab bilkul nahi pata, toh SIRF yeh ek word type karo — response mein aur kuch bhi nahi, koi explanation nahi, koi sentence nahi: ESCALATE
 4. Har message ka jawab do`;
 }
 
@@ -209,26 +219,36 @@ export async function handleDM(jid, text) {
 
   console.log(`[Bot] → "${reply.slice(0, 80)}"`);
 
-  // Escalate to TEST_GROUP if Claude doesn't know
-  if (reply.trim().toUpperCase() === "ESCALATE") {
-    const hold = "Ek second Aap — main check karke abhi batata hoon! 🙏";
+  // Escalate if Claude's reply is the word ESCALATE (or close variants like "ESCALATE.")
+  // Claude sometimes adds surrounding text despite instructions — catch those too.
+  // Safety net: cleanText below also strips "escalate" so it never reaches the customer.
+  const isEscalate =
+    /^\s*escalate[.!?]?\s*$/i.test(reply) ||   // just the word, maybe punctuation
+    reply.trim().toUpperCase() === "ESCALATE";   // exact match (legacy)
+
+  if (isEscalate) {
+    const hold = "Ek second — main abhi check karke bata deta hoon 🙏";
     try { await client.sendTextMessage(jid, hold); } catch {}
     conv.history.push({ role: "assistant", content: hold });
 
     pendingEscalations.push({ jid, question: text, sentAt: Date.now() });
-    const alert = `🆘 *Rounak stuck* — reseller sawaal:\n"${text}"\n_(JID: ${jid})_\n\nKya reply karun?`;
+    const alert = `🆘 *Rounak ko nahi pata* — reseller ka sawaal:\n"${text}"\n_(JID: ${jid})_\n\nKya reply karun?`;
     try {
       await client.sendTextMessage(TEST_GROUP_JID, alert);
-      console.log(`[Bot] Escalated: "${text.slice(0, 60)}"`);
+      console.log(`[Bot] Escalated to TEST_GROUP: "${text.slice(0, 60)}"`);
     } catch (e) {
-      console.error("[Bot] Escalation alert failed:", e.message);
+      console.error("[Bot] Escalation alert FAILED (TEST_GROUP send error):", e.message);
     }
     return;
   }
 
-  // Parse product tag
+  // Parse product tag and strip it from text; also strip ESCALATE as a safety net
+  // so it can never leak to the customer even if detection above missed a variant
   const tagMatch  = reply.match(/\[PRODUCTS:(\w+)(?::([^\]]+))?\]/i);
-  const cleanText = reply.replace(/\[PRODUCTS:\w+(?::[^\]]+)?\]/gi, "").trim();
+  const cleanText = reply
+    .replace(/\[PRODUCTS:\w+(?::[^\]]+)?\]/gi, "")
+    .replace(/\bescalate\b/gi, "")
+    .trim();
 
   conv.history.push({ role: "assistant", content: cleanText || reply });
 

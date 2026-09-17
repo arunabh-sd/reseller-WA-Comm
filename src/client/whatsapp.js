@@ -160,8 +160,9 @@ class WhatsAppClient extends EventEmitter {
       for (const msg of messages) {
         const jid = msg.key.remoteJid;
 
-        // Log EVERY DM — BEFORE fromMe check — to catch the @lid fromMe bug
-        if (!jid?.endsWith("@g.us")) {
+        // Log every inbound message (DMs and TEST_GROUP alike) so we can see escalation replies
+        const isTestGroup = jid === "120363431273030908@g.us";
+        if (!jid?.endsWith("@g.us") || isTestGroup) {
           console.log(`[WA] recv [${src}] type=${type} jid=${jid} fromMe=${msg.key.fromMe} decrypted=${!!msg.message}`);
         }
 
