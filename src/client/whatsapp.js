@@ -136,24 +136,35 @@ class WhatsAppClient extends EventEmitter {
 
     // Forward incoming messages so other modules can react (e.g. "Yes" for pending changes)
     this.sock.ev.on("messages.upsert", ({ messages, type }) => {
+      // Fire for EVERY upsert so we know the event reaches us at all
+      const dmCount = messages.filter(m => !m.key.remoteJid?.endsWith("@g.us")).length;
+      if (dmCount > 0) {
+        console.log(`[WA] upsert fired: type=${type} total=${messages.length} DMs=${dmCount}`);
+      }
+
       for (const msg of messages) {
-        if (msg.key.fromMe) continue;
         const jid = msg.key.remoteJid;
 
-        // Log all DM events before any type filtering — lets us see what type DMs arrive as
+        // Log EVERY DM message — BEFORE fromMe check — to catch the @lid fromMe bug
         if (!jid?.endsWith("@g.us")) {
-          console.log(`[WA] recv type=${type} jid=${jid} decrypted=${!!msg.message}`);
+          console.log(`[WA] recv type=${type} jid=${jid} fromMe=${msg.key.fromMe} decrypted=${!!msg.message}`);
         }
 
-        // "notify" = real-time new message
-        // "append" = WhatsApp syncing queued messages after a reconnect
-        // Both need to be handled — "append" is often how DMs arrive after a brief disconnect
-        if (type === "append") {
-          // Skip old history (>5 min) to avoid replaying past conversations on reconnect
-          const ts = (msg.messageTimestamp || 0) * 1000;
-          if (Date.now() - ts > 5 * 60 * 1000) continue;
-        } else if (type !== "notify") {
-          continue;
+        if (msg.key.fromMe) continue;
+
+        // For DMs: accept notify, append (recent), relay, and any other real-time types.
+        // "relay" is used in multi-device when a companion device delivers the message.
+        // For groups: only "notify" (avoid replaying history after reconnect).
+        const isDM = jid && !jid.endsWith("@g.us");
+        if (isDM) {
+          if (type === "append") {
+            // Skip old history but accept recent appends
+            const ts = (msg.messageTimestamp || 0) * 1000;
+            if (Date.now() - ts > 5 * 60 * 1000) continue;
+          }
+          // else: accept notify, relay, and anything else for DMs
+        } else {
+          if (type !== "notify") continue;
         }
 
         if (!msg.message) continue;
