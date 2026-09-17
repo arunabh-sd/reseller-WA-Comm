@@ -1,4 +1,3 @@
-import Anthropic from "@anthropic-ai/sdk";
 import client from "./client/whatsapp.js";
 import { getProductMap } from "./cache.js";
 import { loadWeights } from "./learning.js";
@@ -67,32 +66,6 @@ export async function resolveContactJids(sock) {
 
   console.log(`[Nudge] NUDGE_JIDS after resolve:`, [...NUDGE_JIDS]);
 }
-
-// ── In-memory conversation state (fresh each day) ─────────────────────────────
-
-const conversations = new Map();
-
-const CONV_TTL_MS = 4 * 60 * 60 * 1000; // expire after 4 hours of no reply
-
-// ── Claude system prompt ──────────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `Tum Rounak ho — ShopDeck mein kaam karte ho aur kuch resellers ke saath personally touch mein rehte ho. Tumhara kaam hai unhe naye aur trending products ke baare mein update karna aur jo specific chaahein woh dikhana.
-
-WhatsApp pe Hinglish mein baat karo — natural, warm, friendly. "Aap" use karo. 1-3 short sentences max. Emojis theek hain agar natural lage.
-
-Genuinely helpful bano — unki preference samjho aur us hisaab se products suggest karo. Products ke baare mein enthusiastic raho (bestsellers, margins, exclusives) — jaise ek knowledgeable dost jo sach mein achha stuff jaanta ho. Kabhi bhi creepy ya pushy mat lagna.
-
-Products dikhane ke liye:
-[PRODUCTS:category]               — best picks from that category
-[PRODUCTS:category:green]         — jab user ne color mention kiya ho
-[PRODUCTS:category:500-1500]      — jab user ne price range batai ho (RSP filter hoga)
-[PRODUCTS:category:green 500-1500] — dono criteria
-
-Filter SIRF tab add karo jab user ne clearly specify kiya ho.
-Available: kurti | saree | western | jewellery | bags
-Jo nahi hai (mens, footwear, kids) — honestly batao.
-
-Ek tag per message. Conversation naturally end hone do — pressure nahi dena.`;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -241,31 +214,11 @@ export async function sendNudgeProducts(jid, pool) {
   return prods;
 }
 
-// ── Claude call ───────────────────────────────────────────────────────────────
-
-async function getAIReply(history) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
-
-  const anthropic = new Anthropic({
-    apiKey,
-    ...(process.env.ANTHROPIC_BASE_URL && { baseURL: process.env.ANTHROPIC_BASE_URL }),
-    defaultHeaders: { "x-litellm-api-key": apiKey },
-  });
-
-  const msg = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
-    max_tokens: 200,
-    system:     SYSTEM_PROMPT,
-    messages:   history,
-  });
-
-  return msg.content[0]?.text?.trim() || null;
-}
-
 // ── Public API ────────────────────────────────────────────────────────────────
 
-export async function startNudgeCampaign() {
+// onSent(jid, text) — called after each successful opening send so bot.js can
+// seed the conversation history for the right JID.
+export async function startNudgeCampaign(onSent) {
   console.log("[Nudge] Starting daily campaign…");
 
   for (const contact of CONTACTS) {
@@ -280,14 +233,6 @@ export async function startNudgeCampaign() {
       `Aaj kuch achhi collections aai hain — kurti, saree, jewellery mein kafi achha stock hai. ` +
       `Koi specific category ya style dekhna tha?`;
 
-    conversations.set(jid, {
-      contact,
-      history:   [{ role: "assistant", content: opening }],
-      shownIds:  new Set(),
-      active:    true,
-      lastAt:    Date.now(),
-    });
-
     try {
       if (!client.isReady) throw new Error("WhatsApp not ready");
       // Subscribe to presence first — triggers key bundle sync for fresh Signal session.
@@ -300,133 +245,14 @@ export async function startNudgeCampaign() {
       const actualJid = sent?.key?.remoteJid;
       if (actualJid && actualJid !== jid) {
         learnJid(actualJid, contact);
-        conversations.set(actualJid, conversations.get(jid));
       }
-      console.log(`[Nudge] Opened → ${contact.name}`);
+      const effectiveJid = actualJid || jid;
+      if (onSent) onSent(effectiveJid, opening);
+      console.log(`[Nudge] Opened → ${contact.name} (${effectiveJid})`);
     } catch (err) {
       console.error(`[Nudge] Failed to open with ${contact.name}:`, err.message);
-      conversations.delete(jid);
     }
 
     await sleep(2000 + Math.random() * 1000);
-  }
-}
-
-// Dynamically resolve an unknown @lid to one of our 3 contacts at reply-time.
-// Called only when jid is not already in CONTACT_BY_JID.
-async function resolveContactFromLid(lid) {
-  if (CONTACT_BY_JID.has(lid)) return CONTACT_BY_JID.get(lid);
-
-  const allContacts = client.sock?.contacts || {};
-
-  // Check @lid entry in contacts store for phone back-reference
-  const lidEntry = allContacts[lid];
-  if (lidEntry) {
-    console.log(`[Nudge] contacts[${lid}] =`, JSON.stringify(lidEntry));
-    const phoneRef = lidEntry.phoneJid || lidEntry.linkedJid || lidEntry.jid;
-    if (phoneRef && phoneRef !== lid) {
-      for (const contact of CONTACTS) {
-        if (phoneRef.includes(contact.phone)) { learnJid(lid, contact); return contact; }
-      }
-    }
-  }
-
-  // Scan all contacts for @s.whatsapp.net entry with a .lid back-ref to this lid
-  for (const [key, val] of Object.entries(allContacts)) {
-    if (!key.endsWith('@s.whatsapp.net')) continue;
-    if (val?.lid === lid || val?.linkedJid === lid) {
-      for (const contact of CONTACTS) {
-        if (key.includes(contact.phone)) { learnJid(lid, contact); return contact; }
-      }
-    }
-  }
-
-  // onWhatsApp — Baileys 6.7+ may return .lid field; also check .jid in case
-  for (const contact of CONTACTS) {
-    try {
-      const results = await client.sock.onWhatsApp(`+91${contact.phone}`);
-      const res = results?.[0];
-      if (!res) continue;
-      if (res.jid === lid || res.lid === lid) { learnJid(lid, contact); return contact; }
-    } catch {}
-  }
-
-  console.log(`[Nudge] Could not resolve @lid: ${lid} — contacts sample:`,
-    Object.entries(allContacts).slice(0, 3).map(([k, v]) => `${k}=${JSON.stringify(v)}`).join(' | '));
-  return null;
-}
-
-// Strict whitelist — only JIDs we've explicitly learned for our 3 contacts.
-// No catch-all for @lid so random DMs are never intercepted.
-export function isNudgeJid(jid) {
-  return NUDGE_JIDS.has(jid);
-}
-
-export async function handleNudgeReply(jid, text) {
-  let conv = conversations.get(jid);
-
-  if (!conv || !conv.active) {
-    let contact = CONTACT_BY_JID.get(jid);
-
-    // For unknown @lid JIDs, try to resolve to a known contact
-    if (!contact && jid?.endsWith('@lid')) {
-      contact = await resolveContactFromLid(jid);
-    }
-
-    if (!contact) {
-      console.log(`[Nudge] Ignoring message from unrecognised JID: ${jid}`);
-      return; // not one of our 3 contacts — do not reply
-    }
-    conv = { contact, history: [], shownIds: new Set(), active: true, lastAt: Date.now() };
-    conversations.set(jid, conv);
-  }
-
-  conv.lastAt = Date.now();
-  conv.history.push({ role: "user", content: text });
-
-  let aiText;
-  try {
-    aiText = await getAIReply(conv.history);
-  } catch (err) {
-    console.error("[Nudge] Claude error:", err.message);
-    return;
-  }
-  if (!aiText) return;
-
-  // Parse product tag — [PRODUCTS:category] or [PRODUCTS:category:filter]
-  const match     = aiText.match(/\[PRODUCTS:(\w+)(?::([^\]]+))?\]/i);
-  const cleanText = aiText.replace(/\[PRODUCTS:\w+(?::[^\]]+)?\]/gi, "").trim();
-
-  conv.history.push({ role: "assistant", content: cleanText || aiText });
-
-  // Send text reply
-  if (cleanText) {
-    try {
-      await client.sendTextMessage(jid, cleanText);
-    } catch (err) {
-      console.error("[Nudge] Text send failed:", err.message);
-    }
-  }
-
-  // Send products if Claude requested them
-  if (match) {
-    const category    = match[1].toLowerCase();
-    const filterQuery = match[2]?.trim() || "";
-    await sleep(800);
-    try {
-      const pool = await fetchNudgePool(category, conv.shownIds, filterQuery);
-      if (pool.length) {
-        const sent = await sendNudgeProducts(jid, pool);
-        sent.forEach(p => conv.shownIds.add(p.customer_product_short_id));
-        console.log(`[Nudge] Sent ${sent.length} ${category}${filterQuery ? ` [${filterQuery}]` : ""} products to ${conv.contact.name}`);
-      } else {
-        const noMatchMsg = filterQuery
-          ? `Is waqt "${filterQuery}" ke matching koi product available nahi hai. Kya aap koi aur preference batayenge?`
-          : `Is waqt ${category} mein kuch available nahi hai. Koi aur category try karein?`;
-        await client.sendTextMessage(jid, noMatchMsg);
-      }
-    } catch (err) {
-      console.error("[Nudge] Product send failed:", err.message);
-    }
   }
 }

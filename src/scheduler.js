@@ -6,6 +6,7 @@ import { checkOrders } from "./orders.js";
 import { startNudgeCampaign } from "./nudge.js";
 import { warmCache } from "./cache.js";
 import { sendYesterdayReport, sendTodayReport, processWelcomeQueue, pollCommunityMembers } from "./community.js";
+import { seedConvo } from "./bot.js";
 import client from "./client/whatsapp.js";
 
 export function startScheduler() {
@@ -75,7 +76,7 @@ export function startScheduler() {
   cron.schedule("*/30 9-19 * * *",
     async () => {
       await pollCommunityMembers().catch(e => console.error("[Community] Poll failed:", e.message));
-      await processWelcomeQueue().catch(e => console.error("[Community] Welcome queue failed:", e.message));
+      await processWelcomeQueue(seedConvo).catch(e => console.error("[Community] Welcome queue failed:", e.message));
     },
     { timezone: "Asia/Kolkata" }
   );
@@ -91,7 +92,7 @@ export function startScheduler() {
     if (nudgeFiredDate === today) return;
     nudgeFiredDate = today;
     try {
-      await startNudgeCampaign();
+      await startNudgeCampaign(seedConvo);
     } catch (err) {
       console.error("[Nudge] Campaign failed:", err.message);
     }

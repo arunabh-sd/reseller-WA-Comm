@@ -9,10 +9,11 @@ import pino from "pino";
 import { EventEmitter } from "events";
 import fs from "fs";
 
-// Default to DATA_DIR/auth so session files land on the Railway volume.
-// Without this, auth is in ephemeral /app/auth → lost on every deploy → Bad MAC.
-const AUTH_DIR = process.env.AUTH_DIR ||
-  (process.env.DATA_DIR ? `${process.env.DATA_DIR}/auth` : "auth");
+// DATA_DIR always wins — guarantees auth lands on the Railway volume even if
+// AUTH_DIR env var is set to an ephemeral path like /app/auth.
+const AUTH_DIR = process.env.DATA_DIR
+  ? `${process.env.DATA_DIR}/auth`
+  : (process.env.AUTH_DIR || "auth");
 const logger = pino({ level: "silent" }); // Baileys internal logs off
 
 // Persist sent messages across Railway redeploys so retransmission works without "." fallback

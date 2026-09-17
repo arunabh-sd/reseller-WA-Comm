@@ -1,10 +1,8 @@
-import Anthropic from "@anthropic-ai/sdk";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import client from "./client/whatsapp.js";
 import { TEST_GROUP_JID } from "./pending_changes.js";
-import { fetchNudgePool, sendNudgeProducts } from "./nudge.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VIDEO_PATH = path.join(__dirname, "../assets/intro.mp4");
@@ -216,66 +214,8 @@ function buildWelcomeMessage(communityJid) {
   ].join("\n");
 }
 
-// ── Chatbot ───────────────────────────────────────────────────────────────────
-
-const SYSTEM_PROMPT = `Tum Rounak ho — ShopDeck ke reseller support executive. Naye community members ke sawaalon ka jawab do aur products share karo jab maangi jaayein.
-
-KNOWLEDGE BASE — sirf yahi se jawab do, kuch bhi bahar se invent mat karo:
-
-Platform basics:
-- Joining bilkul free, koi sign up nahi chahiye
-- qrate.shopdeck.com pe jaao, products browse karo aur share karo
-- Login sirf tab chahiye jab customer ke liye order place karna ho
-
-Price setting:
-- Sharing ke time ya order placement ke time dono pe price set kar sakte hain
-- Har product pe min price (manufacturer cost) aur max price (brand website price) dikhti hai — aap beech mein jo chahein rakho
-
-Product quality:
-- Sirf wahi products listed hain jahan 100+ customers ka quality feedback ho aur wo accha ho — quality guaranteed
-- Phir bhi issue ho toh no questions asked returns, ShopDeck sab shipping aur return shipping cost deta hai
-
-Order flow:
-- Customer order karna chahe → reseller qrate.shopdeck.com pe jaake customer ke liye order place karta hai
-- Customer ko order tracking link milta hai, reseller "My Orders" section se track kar sakta hai
-
-Delivery: 4–7 working days
-
-COD:
-- Available hai
-- COD charge approx ₹50 — customer deta hai
-- Agar customer COD refuse kare → product wapas seller ke paas, reseller aur customer dono se koi charge nahi
-
-Payments:
-- Order deliver hone ke baad payment milti hai
-- Seedha bank account mein transfer hoti hai
-- Bank details daalni hain: qrate.shopdeck.com → My Account section
-
-Privacy:
-- Customer ko sirf reseller ka naam dikhega — ShopDeck ka nahi. Aapka customer aapka hi hai.
-
-Agar koi aur cheez pooche jo upar cover nahi:
-- Yahi kaho: "Iske baare mein aap qrate.shopdeck.com pe ja ke dekh sakte hain — wahan sab details available hain"
-- Koi doosri website, phone number, email ya document KABHI refer mat karo siwaaye qrate.shopdeck.com ke
-
-PRODUCTS SHARE KARNE KE LIYE:
-Jab reseller koi category ya price range maange toh response mein yeh tag daalo:
-[PRODUCTS:category]                — e.g. [PRODUCTS:kurti]
-[PRODUCTS:category:filter]         — e.g. [PRODUCTS:kurti:green 500-1500]
-Available categories: kurti | saree | western | jewellery | bags
-Ek hi tag per reply. Filter tab add karo jab reseller ne clearly color ya price range bola ho.
-Jo available nahi (mens, kids, footwear) — honestly batao.
-
-RULES:
-- Hinglish, warm aur helpful, 1-3 sentences max
-- Koi bhi cheez invent mat karo jo upar nahi di — URLs, features, pricing, policies
-- Har message ka jawab do — reseller ne kuch bhi bheja ho`;
-
-// In-memory active conversations: @s.whatsapp.net JID → { history, lastAt, communityJid, shownIds }
-const activeWelcomeConvos = new Map();
-
 // LIDs we already welcomed this process lifetime — prevents double-welcoming
-// after someone rejoins. Separate from activeWelcomeConvos because @lid ≠ @s.whatsapp.net.
+// after someone rejoins. Separate from DM conversations because @lid ≠ @s.whatsapp.net.
 const _welcomedLids = new Set();
 
 function isBusinessHours() {
@@ -285,7 +225,10 @@ function isBusinessHours() {
   return hour >= 9 && hour < 20;
 }
 
-export async function processWelcomeQueue() {
+// onSent(jid, text) — called after each successful welcome send so bot.js can
+// seed the conversation history. Note: @lid JID seeded here may not match the
+// @s.whatsapp.net JID of subsequent replies — this is a WhatsApp limitation.
+export async function processWelcomeQueue(onSent) {
   if (!isBusinessHours()) return;
 
   const data = loadData();
@@ -302,8 +245,6 @@ export async function processWelcomeQueue() {
   console.log(`[Community] Sending ${toProcess.length} welcome message(s)`);
 
   for (const entry of toProcess) {
-    if (activeWelcomeConvos.has(entry.memberJid)) continue;
-
     const welcomeMsg = buildWelcomeMessage(entry.groupJid);
 
     try {
@@ -316,97 +257,12 @@ export async function processWelcomeQueue() {
         await new Promise(r => setTimeout(r, 1000));
       }
       await client.sendTextMessage(entry.memberJid, welcomeMsg);
-      // Mark as welcomed by LID — prevents re-queuing if they rejoin this session.
-      // activeWelcomeConvos is NOT keyed here: @lid ≠ incoming @s.whatsapp.net JID.
-      // Replies are caught by the catch-all DM router in index.js.
       _welcomedLids.add(entry.memberJid);
+      if (onSent) onSent(entry.memberJid, welcomeMsg);
       console.log(`[Community] Welcomed ${entry.memberJid}${videoBuffer ? " (with video)" : ""}`);
       await new Promise(r => setTimeout(r, 1500 + Math.random() * 1000));
     } catch (e) {
       console.warn(`[Community] Welcome failed for ${entry.memberJid}:`, e.message);
-    }
-  }
-}
-
-async function getAIReply(history) {
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) return null;
-
-  const anthropic = new Anthropic({
-    apiKey,
-    ...(process.env.ANTHROPIC_BASE_URL && { baseURL: process.env.ANTHROPIC_BASE_URL }),
-    defaultHeaders: { "x-litellm-api-key": apiKey },
-  });
-
-  const msg = await anthropic.messages.create({
-    model:      "claude-sonnet-4-6",
-    max_tokens: 200,
-    system:     SYSTEM_PROMPT,
-    messages:   history,
-  });
-
-  return msg.content[0]?.text?.trim() || null;
-}
-
-export async function handleResellerReply(jid, text) {
-  let conv = activeWelcomeConvos.get(jid);
-  if (!conv) {
-    conv = { history: [], lastAt: Date.now(), shownIds: new Set() };
-    activeWelcomeConvos.set(jid, conv);
-  }
-
-  conv.lastAt = Date.now();
-  conv.history.push({ role: "user", content: text });
-  if (conv.history.length > 10) conv.history = conv.history.slice(-10);
-
-  console.log(`[Reseller] Getting AI reply for ${jid} (history: ${conv.history.length} msgs)`);
-
-  let aiText;
-  try {
-    aiText = await getAIReply(conv.history);
-  } catch (e) {
-    console.error("[Reseller] Claude error:", e.message);
-    return;
-  }
-  if (!aiText) {
-    console.warn(`[Reseller] Empty AI reply for ${jid}`);
-    return;
-  }
-  console.log(`[Reseller] Replying to ${jid}: "${aiText.slice(0, 60)}"`);
-
-
-  // Parse optional product tag
-  const match     = aiText.match(/\[PRODUCTS:(\w+)(?::([^\]]+))?\]/i);
-  const cleanText = aiText.replace(/\[PRODUCTS:\w+(?::[^\]]+)?\]/gi, "").trim();
-
-  conv.history.push({ role: "assistant", content: cleanText || aiText });
-
-  if (cleanText) {
-    try {
-      await client.sendTextMessage(jid, cleanText);
-    } catch (e) {
-      console.error("[Community] Text send failed:", e.message);
-    }
-  }
-
-  if (match) {
-    const category    = match[1].toLowerCase();
-    const filterQuery = match[2]?.trim() || "";
-    await new Promise(r => setTimeout(r, 800));
-    try {
-      const pool = await fetchNudgePool(category, conv.shownIds, filterQuery);
-      if (pool.length) {
-        const sent = await sendNudgeProducts(jid, pool);
-        sent.forEach(p => conv.shownIds.add(p.customer_product_short_id));
-        console.log(`[Community] Sent ${sent.length} ${category} products to ${jid}`);
-      } else {
-        const noMatch = filterQuery
-          ? `Is waqt "${filterQuery}" ke matching products nahi hain. Koi aur preference batayein?`
-          : `Is waqt ${category} mein kuch available nahi. Koi aur category try karein?`;
-        await client.sendTextMessage(jid, noMatch);
-      }
-    } catch (e) {
-      console.error("[Community] Product send failed:", e.message);
     }
   }
 }
