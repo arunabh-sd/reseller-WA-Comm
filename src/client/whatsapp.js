@@ -6,6 +6,7 @@ import makeWASocket, {
 } from "@whiskeysockets/baileys";
 import { Boom } from "@hapi/boom";
 import pino from "pino";
+import { Writable } from "stream";
 import { EventEmitter } from "events";
 import fs from "fs";
 
@@ -24,7 +25,21 @@ process.stderr.write = (chunk, ...args) => {
       s.includes("decrypt message") || s.includes("Error decrypting")) return true;
   return _origStderrWrite(chunk, ...args);
 };
-const logger = pino({ level: "silent" }); // Baileys internal pino logs off
+// Show Baileys' internal warnings/errors (pino level "warn") so we can see what
+// fails during DM decryption — but filter out the high-frequency Bad MAC errors
+// from group broadcast recipients to avoid Railway's 500 log/sec rate limit.
+const _pinoFilter = new Writable({
+  write(chunk, enc, cb) {
+    const s = chunk.toString();
+    // Only filter the high-frequency Bad MAC flood; everything else (including
+    // per-JID decryption errors) must come through so we can diagnose DM failures.
+    if (!s.includes("Bad MAC") && !s.includes("bad mac") && !s.includes("bad_mac")) {
+      process.stdout.write(s);
+    }
+    cb();
+  }
+});
+const logger = pino({ level: "warn" }, _pinoFilter);
 
 // Persist sent messages across Railway redeploys so retransmission works without "." fallback
 const MSGSTORE_PATH = process.env.DATA_DIR
@@ -134,23 +149,33 @@ class WhatsAppClient extends EventEmitter {
 
     this.sock.ev.on("creds.update", saveCreds);
 
-    // Forward incoming messages so other modules can react (e.g. "Yes" for pending changes)
-    this.sock.ev.on("messages.upsert", ({ messages, type }) => {
-      // Fire for EVERY upsert so we know the event reaches us at all
+    // Dedup by message ID — both ev.process and ev.on may fire for the same message.
+    // Using both gives us a diagnostic signal: if ev.process fires but ev.on doesn't,
+    // the bug is in Baileys' ev.on wrapper. Messages are processed exactly once.
+    const _processedIds = new Set();
+    const _handleBatch = (messages, type, src) => {
       const dmCount = messages.filter(m => !m.key.remoteJid?.endsWith("@g.us")).length;
       if (dmCount > 0) {
-        console.log(`[WA] upsert fired: type=${type} total=${messages.length} DMs=${dmCount}`);
+        console.log(`[WA] upsert [${src}]: type=${type} total=${messages.length} DMs=${dmCount}`);
       }
 
       for (const msg of messages) {
         const jid = msg.key.remoteJid;
 
-        // Log EVERY DM message — BEFORE fromMe check — to catch the @lid fromMe bug
+        // Log EVERY DM — BEFORE fromMe check — to catch the @lid fromMe bug
         if (!jid?.endsWith("@g.us")) {
-          console.log(`[WA] recv type=${type} jid=${jid} fromMe=${msg.key.fromMe} decrypted=${!!msg.message}`);
+          console.log(`[WA] recv [${src}] type=${type} jid=${jid} fromMe=${msg.key.fromMe} decrypted=${!!msg.message}`);
         }
 
         if (msg.key.fromMe) continue;
+
+        // Dedup — both handlers may see the same message
+        const msgId = msg.key.id;
+        if (_processedIds.has(msgId)) continue;
+        _processedIds.add(msgId);
+        if (_processedIds.size > 300) {
+          _processedIds.delete(_processedIds.values().next().value);
+        }
 
         // For DMs: accept notify, append (recent), relay, and any other real-time types.
         // "relay" is used in multi-device when a companion device delivers the message.
@@ -158,7 +183,6 @@ class WhatsAppClient extends EventEmitter {
         const isDM = jid && !jid.endsWith("@g.us");
         if (isDM) {
           if (type === "append") {
-            // Skip old history but accept recent appends
             const ts = (msg.messageTimestamp || 0) * 1000;
             if (Date.now() - ts > 5 * 60 * 1000) continue;
           }
@@ -172,11 +196,27 @@ class WhatsAppClient extends EventEmitter {
           msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||
           msg.message.ephemeralMessage?.message?.conversation ||
-          msg.message.ephemeralMessage?.message?.extendedTextMessage?.text ||
+          msg.message.ephemeralMessage?.message?.extendedTextEffect?.text ||
           ""
         ).trim();
         if (text) this.emit("message", { jid, text, key: msg.key });
       }
+    };
+
+    // ev.process — Baileys' lower-level batch handler, fires before ev.on listeners
+    if (typeof this.sock.ev.process === "function") {
+      this.sock.ev.process(async (events) => {
+        if (events["messages.upsert"]) {
+          const { messages, type } = events["messages.upsert"];
+          _handleBatch(messages, type, "proc");
+        }
+      });
+    }
+
+    // ev.on — standard listener. If this fires but proc doesn't (or vice versa),
+    // it narrows which layer of Baileys has the bug.
+    this.sock.ev.on("messages.upsert", ({ messages, type }) => {
+      _handleBatch(messages, type, "on");
     });
 
     this.sock.ev.on("connection.update", (update) => {
