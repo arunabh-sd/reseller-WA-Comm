@@ -227,17 +227,27 @@ export async function handleDM(jid, text) {
     reply.trim().toUpperCase() === "ESCALATE";   // exact match (legacy)
 
   if (isEscalate) {
+    console.log(`[Bot] ESCALATE detected from ${jid} — sending hold + alerting TEST_GROUP ${TEST_GROUP_JID}`);
+
     const hold = "Ek second — main abhi check karke bata deta hoon 🙏";
-    try { await client.sendTextMessage(jid, hold); } catch {}
+    try { await client.sendTextMessage(jid, hold); } catch (e) {
+      console.warn("[Bot] Hold message failed:", e.message);
+    }
     conv.history.push({ role: "assistant", content: hold });
 
     pendingEscalations.push({ jid, question: text, sentAt: Date.now() });
     const alert = `🆘 *Rounak ko nahi pata* — reseller ka sawaal:\n"${text}"\n_(JID: ${jid})_\n\nKya reply karun?`;
+
+    console.log("[Bot] Sending to TEST_GROUP...");
     try {
-      await client.sendTextMessage(TEST_GROUP_JID, alert);
-      console.log(`[Bot] Escalated to TEST_GROUP: "${text.slice(0, 60)}"`);
+      // Timeout guard — group sends can hang indefinitely if the session is stale
+      await Promise.race([
+        client.sock.sendMessage(TEST_GROUP_JID, { text: alert }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("group send timed out after 10s")), 10000)),
+      ]);
+      console.log(`[Bot] Escalated ✓ TEST_GROUP: "${text.slice(0, 60)}"`);
     } catch (e) {
-      console.error("[Bot] Escalation alert FAILED (TEST_GROUP send error):", e.message);
+      console.error("[Bot] Escalation alert FAILED:", e.message);
     }
     return;
   }
