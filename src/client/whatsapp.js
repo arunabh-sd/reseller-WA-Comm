@@ -25,17 +25,16 @@ process.stderr.write = (chunk, ...args) => {
       s.includes("decrypt message") || s.includes("Error decrypting")) return true;
   return _origStderrWrite(chunk, ...args);
 };
-// Show Baileys' internal warnings/errors (pino level "warn") so we can see what
-// fails during DM decryption — but filter out the high-frequency Bad MAC errors
-// from group broadcast recipients to avoid Railway's 500 log/sec rate limit.
+// Pino at "warn" so Baileys' internal errors appear (e.g. pre-key generation failures,
+// init query errors). Filter the high-frequency noise to stay under Railway's log limits.
 const _pinoFilter = new Writable({
   write(chunk, enc, cb) {
     const s = chunk.toString();
-    // Only filter the high-frequency Bad MAC flood; everything else (including
-    // per-JID decryption errors) must come through so we can diagnose DM failures.
-    if (!s.includes("Bad MAC") && !s.includes("bad mac") && !s.includes("bad_mac")) {
-      process.stdout.write(s);
-    }
+    if (
+      s.includes("Bad MAC") || s.includes("bad mac") || s.includes("bad_mac") ||
+      s.includes("failed to decrypt") || s.includes("Failed to decrypt")
+    ) { cb(); return; }
+    process.stdout.write(s);
     cb();
   }
 });
