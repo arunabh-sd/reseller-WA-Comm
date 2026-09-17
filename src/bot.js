@@ -219,12 +219,10 @@ export async function handleDM(jid, text) {
 
   console.log(`[Bot] → "${reply.slice(0, 80)}"`);
 
-  // Escalate if Claude's reply is the word ESCALATE (or close variants like "ESCALATE.")
-  // Claude sometimes adds surrounding text despite instructions — catch those too.
-  // Safety net: cleanText below also strips "escalate" so it never reaches the customer.
-  const isEscalate =
-    /^\s*escalate[.!?]?\s*$/i.test(reply) ||   // just the word, maybe punctuation
-    reply.trim().toUpperCase() === "ESCALATE";   // exact match (legacy)
+  // Escalate if the word ESCALATE appears ANYWHERE in Claude's reply — Claude reliably
+  // puts it at the end ("mujhe pata nahi — ESCALATE") even when it adds surrounding text.
+  // Safety net: cleanText strips the word before sending so customer never sees it.
+  const isEscalate = /\bescalate\b/i.test(reply);
 
   if (isEscalate) {
     console.log(`[Bot] ESCALATE detected from ${jid} — sending hold + alerting TEST_GROUP ${TEST_GROUP_JID}`);
