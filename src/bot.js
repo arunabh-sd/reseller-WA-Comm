@@ -34,6 +34,12 @@ function appendKB(question, answer) {
 
 loadKB();
 console.log(`[Bot] Loaded ${_learned.length} learned KB entries`);
+// Verify API key is present at startup — fail fast rather than silently
+if (!process.env.ANTHROPIC_API_KEY) {
+  console.error("[Bot] FATAL: ANTHROPIC_API_KEY is not set — replies will not work");
+} else {
+  console.log("[Bot] ANTHROPIC_API_KEY present, BASE_URL:", process.env.ANTHROPIC_BASE_URL || "(none — using api.anthropic.com)");
+}
 
 // ── Conversations ─────────────────────────────────────────────────────────────
 
@@ -186,11 +192,17 @@ export async function handleDM(jid, text) {
 
   console.log(`[Bot] ${jid} → "${text.slice(0, 60)}"`);
 
+  // Test shortcut — bypasses Claude so we can verify receive/send works independently
+  if (text.trim().toLowerCase() === "ping") {
+    try { await client.sendTextMessage(jid, "pong 🏓"); } catch (e) { console.error("[Bot] Ping send failed:", e.message); }
+    return;
+  }
+
   let reply;
   try {
     reply = await claudeReply(conv.history);
   } catch (e) {
-    console.error("[Bot] Claude error:", e.message);
+    console.error("[Bot] Claude error:", e.message, e.status || "", e.error?.message || "");
     return;
   }
   if (!reply) { console.warn("[Bot] Empty reply for", jid); return; }

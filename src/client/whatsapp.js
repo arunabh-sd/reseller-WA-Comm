@@ -14,7 +14,17 @@ import fs from "fs";
 const AUTH_DIR = process.env.DATA_DIR
   ? `${process.env.DATA_DIR}/auth`
   : (process.env.AUTH_DIR || "auth");
-const logger = pino({ level: "silent" }); // Baileys internal logs off
+// Suppress Baileys' direct stderr writes (Bad MAC decrypt errors from group
+// broadcast recipients) — they bypass pino and hit Railway's 500 log/sec
+// rate limit, drowning out every real diagnostic log line.
+const _origStderrWrite = process.stderr.write.bind(process.stderr);
+process.stderr.write = (chunk, ...args) => {
+  const s = typeof chunk === "string" ? chunk : chunk.toString();
+  if (s.includes("Bad MAC") || s.includes("Failed to decrypt") ||
+      s.includes("decrypt message") || s.includes("Error decrypting")) return true;
+  return _origStderrWrite(chunk, ...args);
+};
+const logger = pino({ level: "silent" }); // Baileys internal pino logs off
 
 // Persist sent messages across Railway redeploys so retransmission works without "." fallback
 const MSGSTORE_PATH = process.env.DATA_DIR
@@ -129,13 +139,20 @@ class WhatsAppClient extends EventEmitter {
       if (type !== "notify") return;
       for (const msg of messages) {
         if (msg.key.fromMe) continue;
+        const jid = msg.key.remoteJid;
+        // Log receipt before any filtering so we can confirm delivery vs decrypt failure
+        if (!jid?.endsWith("@g.us")) {
+          console.log(`[WA] recv jid=${jid} decrypted=${!!msg.message}`);
+        }
         if (!msg.message) continue;
         const text = (
           msg.message.conversation ||
           msg.message.extendedTextMessage?.text ||
+          msg.message.ephemeralMessage?.message?.conversation ||
+          msg.message.ephemeralMessage?.message?.extendedTextMessage?.text ||
           ""
         ).trim();
-        if (text) this.emit("message", { jid: msg.key.remoteJid, text, key: msg.key });
+        if (text) this.emit("message", { jid, text, key: msg.key });
       }
     });
 
