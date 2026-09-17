@@ -136,14 +136,26 @@ class WhatsAppClient extends EventEmitter {
 
     // Forward incoming messages so other modules can react (e.g. "Yes" for pending changes)
     this.sock.ev.on("messages.upsert", ({ messages, type }) => {
-      if (type !== "notify") return;
       for (const msg of messages) {
         if (msg.key.fromMe) continue;
         const jid = msg.key.remoteJid;
-        // Log receipt before any filtering so we can confirm delivery vs decrypt failure
+
+        // Log all DM events before any type filtering — lets us see what type DMs arrive as
         if (!jid?.endsWith("@g.us")) {
-          console.log(`[WA] recv jid=${jid} decrypted=${!!msg.message}`);
+          console.log(`[WA] recv type=${type} jid=${jid} decrypted=${!!msg.message}`);
         }
+
+        // "notify" = real-time new message
+        // "append" = WhatsApp syncing queued messages after a reconnect
+        // Both need to be handled — "append" is often how DMs arrive after a brief disconnect
+        if (type === "append") {
+          // Skip old history (>5 min) to avoid replaying past conversations on reconnect
+          const ts = (msg.messageTimestamp || 0) * 1000;
+          if (Date.now() - ts > 5 * 60 * 1000) continue;
+        } else if (type !== "notify") {
+          continue;
+        }
+
         if (!msg.message) continue;
         const text = (
           msg.message.conversation ||
