@@ -222,11 +222,10 @@ export async function startNudgeCampaign(onSent) {
   console.log("[Nudge] Starting daily campaign…");
 
   for (const contact of CONTACTS) {
-    // Prefer known @lid over @s.whatsapp.net to avoid "waiting for this message" on receiver
-    const knownLid = [...CONTACT_BY_JID.entries()].find(
-      ([j, c]) => c === contact && j.endsWith("@lid")
-    )?.[0];
-    const jid = knownLid || toJid(contact.phone);
+    // Always use @s.whatsapp.net for sends — Signal session is indexed by this JID,
+    // so replies (which also arrive as @s.whatsapp.net) match the session correctly.
+    // @lid JIDs cause a session-JID mismatch that breaks decryption on incoming DMs.
+    const jid = toJid(contact.phone);
 
     const opening =
       `Hi ${contact.name} ${contact.honorific}! 👋 Rounak this side, ShopDeck se. ` +

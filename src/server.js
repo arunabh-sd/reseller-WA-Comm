@@ -1,5 +1,6 @@
 import express from "express";
 import QRCode from "qrcode";
+import fs from "fs";
 import client from "./client/whatsapp.js";
 import { sendSlot } from "./sender.js";
 import { DAILY_SLOTS } from "./config/schedule.js";
@@ -90,6 +91,32 @@ export function startQRServer() {
     const tag = `${slot.hour}:${String(slot.minute).padStart(2,"0")} ${slot.category} (${slot.aovBucket})`;
     res.json({ message: `Firing: ${tag}${onlyCommunities ? " — communities only" : ""}` });
     sendSlot(slot, onlyCommunities).catch((e) => console.error("[/trigger]", e));
+  });
+
+  // Nuclear reset — clears ALL auth (including creds.json) and forces a fresh QR scan.
+  // Use only if DMs are still broken after a normal deploy.
+  // After hitting this URL, visit /qr within 60 seconds and scan with the bot's phone.
+  app.get("/reset", (_req, res) => {
+    const AUTH_DIR = process.env.DATA_DIR
+      ? `${process.env.DATA_DIR}/auth`
+      : (process.env.AUTH_DIR || "auth");
+    try {
+      const files = fs.readdirSync(AUTH_DIR);
+      for (const f of files) fs.unlinkSync(`${AUTH_DIR}/${f}`);
+      console.log(`[Reset] Cleared all ${files.length} auth files — QR rescan required`);
+    } catch (e) {
+      console.warn("[Reset] Failed:", e.message);
+    }
+    // Force reconnect — will generate a new QR
+    client.isReady = false;
+    try { client.sock?.ws?.close(); } catch {}
+    res.send(`
+      <html><body style="font-family:sans-serif;padding:40px;text-align:center">
+        <h2 style="color:orange">⚠️ Auth cleared</h2>
+        <p>Visit <a href="/qr">/qr</a> in 5 seconds and scan with the bot's WhatsApp phone.</p>
+        <script>setTimeout(() => location.href='/qr', 5000)</script>
+      </body></html>
+    `);
   });
 
   // Root redirects to /qr

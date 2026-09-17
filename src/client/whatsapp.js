@@ -58,30 +58,31 @@ class WhatsAppClient extends EventEmitter {
     this._loadMsgStore();
   }
 
-  // On first startup, clear stale session state so Signal sessions are fresh.
+  // On first startup, clear all stale Signal key material so the bot re-keys cleanly.
   //
-  // sender-key-memory-* → cleared always (stale = "Waiting for this message" in groups).
-  // session-*           → cleared always (stale = Bad MAC on incoming DMs, which is the
-  //                       exact breakage we have: bot can send but can't receive replies).
-  //                       Signal's pre-key exchange re-establishes sessions automatically
-  //                       on the next message; the contacts' phones handle it transparently.
-  // creds.json          → PRESERVED — identity (no QR rescan needed).
-  // sender-key-*        → PRESERVED — group key chains.
+  // WHY: WhatsApp caches the bot's published pre-keys. When those keys are exhausted
+  // or the local key store is out of sync (e.g. after a Railway redeploy that briefly
+  // ran two instances), every incoming DM fails with "failed to decrypt message" and
+  // messages.upsert never fires. Clearing ALL key material forces Baileys to generate
+  // fresh pre-keys and publish them to WhatsApp on the next connection → contacts'
+  // phones pick up the new keys → sessions establish cleanly → DMs work again.
+  //
+  // creds.json     → PRESERVED — device identity (no QR rescan needed).
+  // app-state-*    → PRESERVED — chat/contact sync state.
+  // Everything else (session-*, pre-keys-*, signed-pre-key-*, sender-key-*) → CLEARED.
   _cleanStaleSessions() {
     try {
       const files = fs.readdirSync(AUTH_DIR);
-      let mem = 0, sess = 0;
+      const KEEP = /^(creds\.json|app-state-sync)/;
+      let cleared = 0;
       for (const file of files) {
-        if (file.startsWith("sender-key-memory-")) {
-          fs.unlinkSync(`${AUTH_DIR}/${file}`);
-          mem++;
-        } else if (file.startsWith("session-")) {
-          fs.unlinkSync(`${AUTH_DIR}/${file}`);
-          sess++;
-        }
+        if (KEEP.test(file)) continue;
+        fs.unlinkSync(`${AUTH_DIR}/${file}`);
+        cleared++;
       }
-      if (mem)  console.log(`[WhatsApp] Cleared ${mem} sender-key-memory files → group redistribution`);
-      if (sess) console.log(`[WhatsApp] Cleared ${sess} DM session files → fresh Signal sessions`);
+      if (cleared > 0) {
+        console.log(`[WhatsApp] Cleared ${cleared} stale key files → fresh pre-keys + sessions`);
+      }
     } catch (e) {
       if (e.code !== "ENOENT") console.warn("[WhatsApp] Session clean failed:", e.message);
     }
