@@ -110,8 +110,11 @@ async function sendToReseller(reseller, overrideJid = null) {
 
     await sleep(1500); // let WA render the album before the links arrive
 
-    // Links-only message — just URLs, no labels, no product names
-    const links = products.map(p => p.qrate_url).filter(Boolean).join("\n");
+    // Links message — numbered, one blank line between each
+    const links = products
+      .map((p, i) => `${i + 1}- ${p.qrate_url}`)
+      .filter(l => l.includes("http"))
+      .join("\n\n");
     if (links) {
       await client.sock.sendMessage(targetJid, { text: links });
     }

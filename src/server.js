@@ -117,12 +117,16 @@ export function startQRServer() {
     sendDailyResellerCampaign().catch(e => console.error("[/reseller/send]", e.message));
   });
 
+  // Prevent double-fire on quick reloads (e.g. browser retry)
+  let previewInFlight = false;
+
   // Preview: run plan for one reseller and send to Arunabh's test number.
   // GET /reseller/preview                     → uses first reseller in today's plan
   // GET /reseller/preview?phone=919039123954  → finds that reseller in the plan
   // Products are NOT recorded in reseller history (safe to call multiple times).
   app.get("/reseller/preview", async (req, res) => {
     if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
+    if (previewInFlight) return res.status(429).json({ error: "Preview already in progress — wait a minute" });
 
     const testPhone = process.env.PREVIEW_TEST_PHONE || "";
     if (!testPhone) return res.status(400).json({ error: "Set PREVIEW_TEST_PHONE env var (e.g. 919869446277) to enable preview sends" });
@@ -150,7 +154,10 @@ export function startQRServer() {
       test_jid:  TEST_JID,
     });
 
-    previewResellerSend(reseller, TEST_JID).catch(e => console.error("[/reseller/preview]", e.message));
+    previewInFlight = true;
+    previewResellerSend(reseller, TEST_JID)
+      .catch(e => console.error("[/reseller/preview]", e.message))
+      .finally(() => { previewInFlight = false; });
   });
 
   // Nuclear reset — clears ALL auth (including creds.json) and forces a fresh QR scan.
