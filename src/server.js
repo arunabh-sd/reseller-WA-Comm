@@ -124,7 +124,9 @@ export function startQRServer() {
   app.get("/reseller/preview", async (req, res) => {
     if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
 
-    const TEST_JID = "919869446277@s.whatsapp.net"; // Arunabh
+    const testPhone = process.env.PREVIEW_TEST_PHONE || "";
+    if (!testPhone) return res.status(400).json({ error: "Set PREVIEW_TEST_PHONE env var (e.g. 919869446277) to enable preview sends" });
+    const TEST_JID = `${testPhone}@s.whatsapp.net`;
 
     let plan = loadTodayPlan();
     if (!plan?.length) {
