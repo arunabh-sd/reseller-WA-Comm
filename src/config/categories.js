@@ -47,17 +47,16 @@ export const CATEGORY_TYPES = {
     "womens_accessories__womens_bags__tote_bag",
   ],
 
-  // ── Watches — verify slug from Metabase card 13784 if no products appear ──
+  // ── Watches (54 products in catalogue)
   watch: [
-    "womens_accessories__watch",
-    "accessories__watch",
+    "womens_accessories__womens_other_accessories__watch",
   ],
 
-  // ── Slippers — verify slug from Metabase card 13784 if no products appear ─
+  // ── Footwear/Slippers: women's heels (366) + slippers that may be mismapped.
+  // Gender filter in ranking.js drops anything with "men/boys/gents" in the name.
   slipper: [
-    "womens_footwear__slipper",
-    "footwear__slipper",
-    "womens_footwear__footwear__slipper",
+    "womens_accessories__womens_footwear__heels",
+    "mens_accessories__mens_footwear__slippers",
   ],
 };
 
@@ -99,11 +98,9 @@ export const SUBCATEGORY_LABELS = {
   womens_accessories__womens_bags__tote_bag:  "Tote Bags",
 
   // Watches & Footwear
-  womens_accessories__watch:                 "Watches",
-  accessories__watch:                        "Watches",
-  womens_footwear__slipper:                  "Slippers",
-  footwear__slipper:                         "Slippers",
-  womens_footwear__footwear__slipper:        "Slippers",
+  womens_accessories__womens_other_accessories__watch: "Watches",
+  womens_accessories__womens_footwear__heels:          "Heels & Slippers",
+  mens_accessories__mens_footwear__slippers:           "Slippers",
 };
 
 // Slot-level labels — used when no sub-category match is found in SUBCATEGORY_LABELS

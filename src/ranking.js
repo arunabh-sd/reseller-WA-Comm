@@ -14,6 +14,11 @@ const CATEGORY_L1_MAP = {
   handbag:  "Bags",
 };
 
+// Exclude products explicitly marketed to men/boys — catches mismapped types
+// and cross-gender products where the name makes it clear. Word-boundary match
+// so "women", "element", "female" are not caught.
+const MALE_NAME_PATTERN = /\b(men|mens|men's|boys|boy's|gents|male|unisex\s+men)\b/i;
+
 function normalise(arr) {
   const max = Math.max(...arr, 1);
   return arr.map((v) => v / max);
@@ -43,11 +48,13 @@ export async function getRankedForSlot({ category }) {
   const expectedL1 = CATEGORY_L1_MAP[category];
 
   const candidates = [...products.values()].filter((p) => {
-    if (!validTypes.has(p.clean_product_type))               return false;
+    if (!validTypes.has(p.clean_product_type))                        return false;
     // L1 guard: only applies for categories that have an L1 entry
     if (expectedL1 && p.category_l1 && p.category_l1 !== expectedL1) return false;
-    if (p.orders_last_30d < MIN_L30D_ORDERS)                return false;
-    if (recentIds.has(p.customer_product_short_id))          return false;
+    if (p.orders_last_30d < MIN_L30D_ORDERS)                         return false;
+    if (recentIds.has(p.customer_product_short_id))                   return false;
+    // Drop anything explicitly marketed to men/boys — catches mismapped types
+    if (MALE_NAME_PATTERN.test(p.product_name))                       return false;
     return true;
   });
 

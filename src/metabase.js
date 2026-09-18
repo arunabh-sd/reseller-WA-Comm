@@ -15,11 +15,13 @@ async function runCard(cardId) {
 }
 
 // Card 14878 — primary product feed (per SKU)
-// Columns: seller_id, seller_name, customer_product_short_id, customer_sku_short_id,
-//          product_name, img_link, website_product_link, website_price,
-//          transfer_price, reseller_selling_price_prepaid, cod_charge,
-//          mp_price, mp_name, mp_link, cheapest_non_meesho_price, marketplace_count,
-//          cheapest, exclusive, orders_last_30d, ppo_last_7d, shares_last_7d
+// Columns (verified from 14878.csv 2026-09-18):
+//   seller_id, seller_name, customer_product_short_id, customer_sku_short_id,
+//   product_name, product_description, colour, size, length, breadth, height, volume,
+//   mrp, cost_price, img_link, website_product_link, website_price, transfer_price,
+//   reseller_selling_price_prepaid, cod_charge, mp_price, mp_name, mp_link,
+//   cheapest_non_meesho_price, marketplace_count, cheapest, exclusive,
+//   orders_last_30d, reseller_orders_last_30d, ppo_last_7d, shares_last_7d
 export async function fetchPrimaryFeed() {
   const id = parseInt(process.env.METABASE_PRODUCT_QUESTION_ID || "14878");
   return runCard(id);
