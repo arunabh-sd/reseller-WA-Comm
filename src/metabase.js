@@ -53,6 +53,28 @@ export async function fetchPerformanceForDate(dateStr) {
   return rows;
 }
 
+// Card 15325 — acquired reseller event data (Ordered / Shared / Browsed per reseller per product)
+// Columns (verified from 15325.csv 2026-09-18):
+//   reseller_id, reseller_name, reseller_phone, activity_type, product_id, activity_date
+// activity_type values: "Ordered" | "Shared" | "Browsed"
+// reseller_phone has trailing .0 (float artifact) — clean with cleanPhone() in reseller_jids.js
+export async function fetchResellerEvents(startDate, endDate) {
+  try {
+    const { data } = await mb.post(`/api/card/15325/query/json`, {
+      parameters: [
+        { type: "date/single", target: ["variable", ["template-tag", "start_date"]], value: startDate },
+        { type: "date/single", target: ["variable", ["template-tag", "end_date"]],   value: endDate },
+      ],
+    });
+    const rows = Array.isArray(data) ? data : [];
+    console.log(`[15325] ${rows.length} reseller events (${startDate} → ${endDate})`);
+    return rows;
+  } catch (err) {
+    console.error("[15325] fetchResellerEvents failed:", err.message);
+    return [];
+  }
+}
+
 // Card 13897 — daily reseller events (one row per day)
 // Columns: total_orders_placed, unique_first_time_orderers, unique_repeat_orderers
 export async function fetchTodayOrders() {

@@ -73,12 +73,11 @@ function buildCombinedText(products, slot) {
     const sellerPrice = p.reseller_selling_price || 0;
     lines.push(`~${fmt(p.website_price)}~ *${fmt(sellerPrice)}*`);
 
-    // Orders
+    // Orders + margin on one line
     const ordersLabel = fmtOrders(p.orders_last_30d);
-    if (ordersLabel) lines.push(`📦 ${ordersLabel} orders`);
-
-    // Margin available
-    if (p.margin && p.margin >= 50) lines.push(`💰 ${fmt(p.margin)} margin available`);
+    const marginLabel = p.margin && p.margin >= 50 ? `💰 ${fmt(p.margin)} margin` : "";
+    const statsLine   = [ordersLabel ? `📦 ${ordersLabel} orders` : "", marginLabel].filter(Boolean).join(" · ");
+    if (statsLine) lines.push(statsLine);
 
     lines.push(`🔗 ${p.qrate_url}`);
     lines.push("");

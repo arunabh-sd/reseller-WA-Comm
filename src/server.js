@@ -4,6 +4,8 @@ import fs from "fs";
 import client from "./client/whatsapp.js";
 import { sendSlot } from "./sender.js";
 import { DAILY_SLOTS } from "./config/schedule.js";
+import { runResellerPlanner, loadTodayPlan } from "./reseller_planner.js";
+import { sendDailyResellerCampaign, previewResellerSend } from "./reseller_sender.js";
 
 const PORT = process.env.PORT || 3000;
 
@@ -91,6 +93,62 @@ export function startQRServer() {
     const tag = `${slot.hour}:${String(slot.minute).padStart(2,"0")} ${slot.category} (${slot.aovBucket})`;
     res.json({ message: `Firing: ${tag}${onlyCommunities ? " — communities only" : ""}` });
     sendSlot(slot, onlyCommunities).catch((e) => console.error("[/trigger]", e));
+  });
+
+  // ── Acquired reseller endpoints ─────────────────────────────────────────────
+
+  // Run (or view) today's reseller plan.
+  // GET /reseller/plan          → returns cached plan if it exists
+  // GET /reseller/plan?force=1  → regenerates even if plan exists today
+  app.get("/reseller/plan", async (req, res) => {
+    const existing = loadTodayPlan();
+    if (existing && !req.query.force) {
+      return res.json({ cached: true, resellers: existing.length, plan: existing });
+    }
+    res.json({ message: "Planning run started — check logs. Reload this URL in ~30s to see the plan." });
+    runResellerPlanner().catch(e => console.error("[/reseller/plan]", e.message));
+  });
+
+  // Fire today's reseller send campaign immediately.
+  // GET /reseller/send — generates plan if missing, then sends to all resellers
+  app.get("/reseller/send", async (req, res) => {
+    if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
+    res.json({ message: "Reseller campaign started — check Railway logs" });
+    sendDailyResellerCampaign().catch(e => console.error("[/reseller/send]", e.message));
+  });
+
+  // Preview: run plan for one reseller and send to Arunabh's test number.
+  // GET /reseller/preview                     → uses first reseller in today's plan
+  // GET /reseller/preview?phone=919039123954  → finds that reseller in the plan
+  // Products are NOT recorded in reseller history (safe to call multiple times).
+  app.get("/reseller/preview", async (req, res) => {
+    if (!client.isReady) return res.status(503).json({ error: "WhatsApp not connected" });
+
+    const TEST_JID = "919869446277@s.whatsapp.net"; // Arunabh
+
+    let plan = loadTodayPlan();
+    if (!plan?.length) {
+      // Auto-generate if missing
+      plan = await runResellerPlanner().catch(() => null);
+    }
+    if (!plan?.length) {
+      return res.status(404).json({ error: "No plan available — try /reseller/plan first" });
+    }
+
+    const phone    = req.query.phone;
+    const reseller = phone
+      ? plan.find(r => r.phone.includes(String(phone).replace(/\.0$/, ""))) ?? plan[0]
+      : plan[0];
+
+    res.json({
+      message:   `Sending ${reseller.reseller_name}'s picks to test number`,
+      reseller:  reseller.reseller_name,
+      phone:     reseller.phone,
+      products:  reseller.products.length,
+      test_jid:  TEST_JID,
+    });
+
+    previewResellerSend(reseller, TEST_JID).catch(e => console.error("[/reseller/preview]", e.message));
   });
 
   // Nuclear reset — clears ALL auth (including creds.json) and forces a fresh QR scan.

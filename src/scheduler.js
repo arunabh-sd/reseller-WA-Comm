@@ -7,6 +7,8 @@ import { startNudgeCampaign } from "./nudge.js";
 import { warmCache } from "./cache.js";
 import { sendYesterdayReport, sendTodayReport, processWelcomeQueue, pollCommunityMembers } from "./community.js";
 import { seedConvo } from "./bot.js";
+import { runResellerPlanner } from "./reseller_planner.js";
+import { sendDailyResellerCampaign } from "./reseller_sender.js";
 import client from "./client/whatsapp.js";
 
 export function startScheduler() {
@@ -102,6 +104,28 @@ export function startScheduler() {
 
   // Fire immediately on startup — covers initial deployment + any restart before 11am
   setTimeout(() => runNudge(), 5000);
+
+  // ── Acquired reseller personalised sends ──────────────────────────────────
+
+  // 6:30am IST — build today's per-reseller product plan (fresh catalog + 60d activity)
+  cron.schedule("30 6 * * *",
+    async () => {
+      try { await runResellerPlanner(); }
+      catch (err) { console.error("[ResellerPlanner] Daily run failed:", err.message); }
+    },
+    { timezone: "Asia/Kolkata" }
+  );
+
+  // 11:10am IST — send personalised recommendations to each acquired reseller
+  // Offset 10 min from nudge (11:00am) to avoid concurrent WA sends
+  cron.schedule("10 11 * * *",
+    async () => {
+      if (!client.isReady) return;
+      try { await sendDailyResellerCampaign(); }
+      catch (err) { console.error("[ResellerSender] Campaign failed:", err.message); }
+    },
+    { timezone: "Asia/Kolkata" }
+  );
 
   const slotSummary = DAILY_SLOTS.map(
     (s) => `${s.hour}:${String(s.minute).padStart(2, "0")} ${s.category}`
