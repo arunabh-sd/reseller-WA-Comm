@@ -13,12 +13,10 @@ const SUBCAT_PERF_FILE = join(DATA_DIR, "subcategory_perf.json");
 const SUBCAT_ALPHA = 0.3;
 
 const DEFAULT_WEIGHTS = {
-  l30d_orders:     0.40,
-  margin:          0.25,
-  l7d_views:       0.20,
-  l7d_shares:      0.15,
-  exclusive:       0.00,
-  marketplace_gap: 0.00,
+  reseller_orders_l30d: 0.40, // reseller-channel orders (new column on card 14878)
+  l30d_orders:          0.30, // overall ShopDeck orders
+  l7d_shares:           0.15, // shares in last 7 days
+  margin:               0.15, // website_price - reseller_selling_price_prepaid
 };
 
 // ── Persistence ───────────────────────────────────────────────────────────────
@@ -67,8 +65,8 @@ function updateSubcategoryPerf(sharedEntries) {
 
 function productLine(p) {
   return `${p.product_name || p.product_id} | ${p.sub_category || "?"} | ₹${p.price || "?"} | ` +
-         `${p.aov_bucket || "?"} AOV | ${p.exclusive ? "excl" : "std"} | ₹${p.margin || 0} margin | ` +
-         `${p.total_orders}orders ${p.total_ppo}PPO ${p.total_shares}shares`;
+         `₹${p.margin || 0} margin | ` +
+         `${p.total_reseller_orders ?? "?"}R-orders ${p.total_orders}total-orders ${p.total_shares}shares`;
 }
 
 function organicLine(r) {
@@ -110,9 +108,9 @@ ORGANIC PERFORMERS — not shared by us, but hit a bucket (${organicHit.length})
 ${organicHit.slice(0, 5).map(organicLine).join("\n") || "none"}
 
 Current ranking weights: ${JSON.stringify(currentWeights, null, 2)}
-(l7d_views = PPO weight; exclusive and marketplace_gap start at 0 and are learned)
+Signals: reseller_orders_l30d = reseller-channel orders (most direct signal); l30d_orders = all ShopDeck orders; l7d_shares = how often resellers shared; margin = website_price minus reseller price.
 
-Analyse patterns: price point, sub-category, exclusivity, margin, AOV bucket, and what organic performers suggest we're missing.
+Analyse patterns: sub-category performance, margin vs conversion, reseller vs overall orders split, and what organic performers suggest we're missing.
 
 Reply in EXACTLY this format — keep it short, this goes on WhatsApp:
 
@@ -125,7 +123,7 @@ RECOMMENDATION:
 [Single sentence, max 20 words — what one thing should we change tomorrow?]
 
 WEIGHT_JSON:
-{"l30d_orders": 0.xx, "margin": 0.xx, "l7d_views": 0.xx, "l7d_shares": 0.xx, "exclusive": 0.xx, "marketplace_gap": 0.xx}
+{"reseller_orders_l30d": 0.xx, "l30d_orders": 0.xx, "l7d_shares": 0.xx, "margin": 0.xx}
 (all weights must sum to 1.0; only change if data is clear; keep existing if unsure)`;
 
   // Supports both direct Anthropic keys (sk-ant-...) and LiteLLM proxy keys.
@@ -151,15 +149,19 @@ function parseAIResponse(text) {
   const recommendMatch    = text.match(/RECOMMENDATION:\s*([^\n]+)/i);
   const weightJsonMatch   = text.match(/WEIGHT_JSON:\s*(\{[\s\S]*?\})/i);
 
+  const VALID_WEIGHT_KEYS = new Set(["reseller_orders_l30d", "l30d_orders", "l7d_shares", "margin"]);
   let weights = null;
   if (weightJsonMatch) {
     try {
       const parsed = JSON.parse(weightJsonMatch[1]);
-      const total  = Object.values(parsed).reduce((s, v) => s + v, 0);
-      // Accept if weights sum roughly to 1
+      // Only accept known weight keys
+      const filtered = Object.fromEntries(
+        Object.entries(parsed).filter(([k]) => VALID_WEIGHT_KEYS.has(k))
+      );
+      const total = Object.values(filtered).reduce((s, v) => s + v, 0);
       if (total > 0.95 && total < 1.05) {
         weights = {};
-        for (const [k, v] of Object.entries(parsed)) weights[k] = +v.toFixed(4);
+        for (const [k, v] of Object.entries(filtered)) weights[k] = +v.toFixed(4);
       } else {
         console.warn("[Learning] AI weight JSON doesn't sum to 1 — ignoring");
       }

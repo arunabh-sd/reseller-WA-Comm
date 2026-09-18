@@ -119,18 +119,18 @@ export async function fetchNudgePool(category, shownIds, filterQuery = "") {
   if (!candidates.length) return [];
 
   const norm = arr => { const mx = Math.max(...arr, 1); return arr.map(v => v / mx); };
-  const normOrders = norm(candidates.map(p => p.orders_last_30d));
-  const normMargin = norm(candidates.map(p => p.margin || 0));
-  const normPPO    = norm(candidates.map(p => p.ppo_last_7d));
-  const normShares = norm(candidates.map(p => p.shares_last_7d));
+  const normResellerOrders = norm(candidates.map(p => p.reseller_orders_last_30d || 0));
+  const normOrders         = norm(candidates.map(p => p.orders_last_30d));
+  const normShares         = norm(candidates.map(p => p.shares_last_7d));
+  const normMargin         = norm(candidates.map(p => p.margin || 0));
 
   return candidates.map((p, i) => ({
     ...p,
     _score:
-      (weights.l30d_orders || 0.40) * normOrders[i] +
-      (weights.margin      || 0.25) * normMargin[i] +
-      (weights.l7d_views   || 0.20) * normPPO[i]    +
-      (weights.l7d_shares  || 0.15) * normShares[i],
+      (weights.reseller_orders_l30d || 0.40) * normResellerOrders[i] +
+      (weights.l30d_orders          || 0.30) * normOrders[i]         +
+      (weights.l7d_shares           || 0.15) * normShares[i]         +
+      (weights.margin               || 0.15) * normMargin[i],
   })).sort((a, b) => b._score - a._score).slice(0, 20); // top 20 pool
 }
 

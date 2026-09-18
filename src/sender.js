@@ -1,7 +1,7 @@
 import client from "./client/whatsapp.js";
 import { pickSlotProducts } from "./ranking.js";
 import { recordShared } from "./history.js";
-import { SUBCATEGORY_LABELS } from "./config/categories.js";
+import { SUBCATEGORY_LABELS, SLOT_LABELS } from "./config/categories.js";
 import { PRODUCTS_PER_SHARE } from "./config/schedule.js";
 
 // Hardcoded target JIDs (from /debug/groups)
@@ -56,52 +56,40 @@ const NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
 
 // ── Combined text message ─────────────────────────────────────────────────────
 function buildCombinedText(products, slot) {
-  const subCatLabel = products[0]?.category_l2 || SUBCATEGORY_LABELS[products[0]?.clean_product_type] || slot.category;
-  const isPremium   = slot.aovBucket === "high";
-  const festival    = getActiveFestival(slot.category);
+  const subCatLabel = SUBCATEGORY_LABELS[products[0]?.clean_product_type]
+    || SLOT_LABELS[slot.category]
+    || slot.category;
+  const festival = getActiveFestival(slot.category);
 
   // Header
-  const label    = isPremium ? `💎 Premium ${subCatLabel}` : subCatLabel;
   const occasion = festival ? `${festival.name} Collection ${festival.emoji}` : "Today's Bestsellers";
-  const lines    = [`🛍️ *${label}* — ${occasion}`, ""];
+  const lines    = [`🛍️ *${subCatLabel}* — ${occasion}`, ""];
 
   // Per-product block
   products.forEach((p, i) => {
     lines.push(`${NUMBERS[i] || `${i + 1}.`} *${p.product_name}*`);
 
-    // Cut price = website price (always exists per user)
+    // Strikethrough website price → reseller price
     const sellerPrice = p.reseller_selling_price || 0;
     lines.push(`~${fmt(p.website_price)}~ *${fmt(sellerPrice)}*`);
 
     // Orders
     const ordersLabel = fmtOrders(p.orders_last_30d);
-    const ordersPart  = ordersLabel ? `📦 ${ordersLabel} orders` : null;
+    if (ordersLabel) lines.push(`📦 ${ordersLabel} orders`);
 
-    // Trust signal — exclusive > marketplace saving
-    let trust = null;
-    if (p.exclusive) {
-      trust = "Exclusive — not listed on any marketplace 🔒";
-    } else if (p.mp_price && p.mp_price - sellerPrice >= 100) {
-      const mpName = p.mp_name
-        ? p.mp_name.charAt(0).toUpperCase() + p.mp_name.slice(1)
-        : "Marketplace";
-      trust = `${fmt(p.mp_price - sellerPrice)} cheaper than ${mpName}`;
-    }
+    // Margin available
+    if (p.margin && p.margin >= 50) lines.push(`💰 ${fmt(p.margin)} margin available`);
 
-    // Orders + trust on same line if both exist, else separate
-    if (ordersPart && trust) lines.push(`${ordersPart} · ${trust}`);
-    else if (ordersPart)     lines.push(ordersPart);
-    else if (trust)          lines.push(trust);
-
-    if (p.sizes) lines.push(`Sizes: ${p.sizes}`);
-    if (p.has_video) lines.push(`🎥 Customer review video`);
     lines.push(`🔗 ${p.qrate_url}`);
     lines.push("");
   });
 
-  // Shared trust footer
-  lines.push("✅ Free delivery · COD available · Easy returns");
-  lines.push("🚚 Delivered in 4–7 days");
+  // Footer
+  lines.push("✅ No Shipping or Return charges · COD available");
+  lines.push("🏆 Quality Guaranteed by Us — otherwise no questions asked return");
+  lines.push("");
+  lines.push("🛒 Explore all categories: https://qrate.shopdeck.com/browse");
+  lines.push("📩 DM me for any help or specific product requests — I'll find and share!");
 
   return lines.join("\n");
 }

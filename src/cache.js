@@ -52,9 +52,12 @@ function buildMap(feed, meta) {
       clean_product_type:        m.clean_product_type || "",
       category_l1:               (PRODUCT_LABELS[id]?.l1) || "",
       category_l2:               (PRODUCT_LABELS[id]?.l2) || "",
-      orders_last_30d:           row.orders_last_30d  || 0,
-      ppo_last_7d:               row.ppo_last_7d      || 0,
-      shares_last_7d:            row.shares_last_7d   || 0,
+      orders_last_30d:          row.orders_last_30d          || 0, // all ShopDeck orders
+      // New column added to card 14878 — reseller-channel orders only.
+      // If the column name differs in Metabase, update the key on the right side.
+      reseller_orders_last_30d: row.reseller_orders_last_30d || 0,
+      ppo_last_7d:              row.ppo_last_7d              || 0,
+      shares_last_7d:           row.shares_last_7d           || 0,
       // Reseller margin: max they can earn per sale (website price - reseller price)
       margin: Math.max(0, (row.website_price || 0) - (row.reseller_selling_price_prepaid || 0)),
       // How much cheaper than marketplace (0 if exclusive or no mp price)
